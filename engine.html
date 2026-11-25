@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3D Wallpaper Engine</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M2 19.5 8.6 9.3a1 1 0 0 1 1.7 0l2.6 4 2-3a1 1 0 0 1 1.7 0l5.4 9.2z"/><circle cx="17.5" cy="5.5" r="2.2" fill="currentColor"/></svg>
+      </span>
+      <div>
+        <h1>3D Wallpaper Engine</h1>
+        <p>Turn any photo into a wallpaper with the clock tucked behind the scene. Everything runs on this computer.</p>
+      </div>
+    </div>
+    <a class="btn ghost" href="newtab.html" id="closeBtn">Back to new tab</a>
+  </header>
+
+  <main class="layout">
+    <section class="stage-wrap">
+      <div class="stage" id="stage">
+        <canvas id="bgCanvas"></canvas>
+        <div class="stage-time" id="stageTime">
+          <div class="stage-date" id="stageDate"></div>
+          <div class="stage-clock" id="stageClock">8:47</div>
+        </div>
+        <canvas id="fgCanvas"></canvas>
+        <canvas id="cursorCanvas"></canvas>
+
+        <!-- Empty / status overlays -->
+        <label class="drop" id="drop" hidden>
+          <input type="file" id="fileInput" accept="image/*" hidden>
+          <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          <strong>Choose a photo</strong>
+          <span>or drop it here · landscapes with open sky work best</span>
+        </label>
+        <div class="fail" id="fail" hidden>
+          <strong>The engine couldn’t process this photo</strong>
+          <code id="failMsg"></code>
+          <div class="fail-btns">
+            <button class="btn ghost" id="copyErr">Copy error</button>
+            <button class="btn ghost" id="redownload">Re-download engine</button>
+            <button class="btn primary" id="tryAgain">Choose another photo</button>
+          </div>
+        </div>
+        <div class="busy" id="busy" hidden>
+          <span class="spinner"></span>
+          <strong id="busyTitle">Finding depth…</strong>
+          <span id="busySub">This takes a few seconds and the page may pause briefly.</span>
+        </div>
+      </div>
+      <p class="stage-hint" id="stageHint">Preview at your screen’s shape. The clock sits behind anything the engine marks as foreground.</p>
+    </section>
+
+    <aside class="panel">
+      <!-- Not installed -->
+      <div class="card" id="installCard" hidden>
+        <h2>Download the engine</h2>
+        <p>A depth model (Depth Anything V2 Small) that works out what’s near and far in your photo. About 27 MB, downloaded once. You can remove it any time in Settings.</p>
+        <div class="progress" id="dlProgress" hidden><span></span></div>
+        <p class="err" id="dlError" hidden></p>
+        <button class="btn primary wide" id="dlBtn">Download engine</button>
+      </div>
+
+      <!-- Before a photo is chosen -->
+      <div class="card" id="tipsCard" hidden>
+        <h2>Tips for great results</h2>
+        <p>Pick a landscape photo with open sky or space in the top half and a clear shape rising into it, like mountains, a skyline, dunes or a lone tree.</p>
+        <p>Use a large image (2560 px wide or more). After the engine finds the depth, drag <b>Clock depth</b> until the clock tucks behind the scene, and use the brush to fix any edges.</p>
+      </div>
+
+      <!-- Editing -->
+      <div id="editPanel" hidden>
+        <div class="card">
+          <h2>Depth</h2>
+          <div class="ctl">
+            <div class="ctl-head"><span>Clock depth</span><output id="depthOut"></output></div>
+            <input type="range" id="depth" min="0" max="100" step="1" value="50">
+            <div class="ctl-scale"><span>Near</span><span>Far</span></div>
+          </div>
+          <div class="ctl">
+            <div class="ctl-head"><span>Edge softness</span><output id="softOut"></output></div>
+            <input type="range" id="soft" min="0" max="100" step="1" value="20">
+          </div>
+          <label class="check"><input type="checkbox" id="showMask"> Highlight foreground</label>
+        </div>
+
+        <div class="card">
+          <h2>Touch up</h2>
+          <div class="seg" id="brushSeg" role="radiogroup" aria-label="Brush">
+            <button type="button" data-brush="off" aria-checked="true">Off</button>
+            <button type="button" data-brush="add" aria-checked="false">Add to front</button>
+            <button type="button" data-brush="erase" aria-checked="false">Send back</button>
+          </div>
+          <div class="ctl">
+            <div class="ctl-head"><span>Brush size</span><output id="brushOut"></output></div>
+            <input type="range" id="brushSize" min="6" max="120" step="1" value="36">
+          </div>
+          <button class="btn ghost" id="clearEdits">Clear touch-ups</button>
+        </div>
+
+        <div class="card">
+          <h2>Clock</h2>
+          <div class="ctl">
+            <div class="ctl-head"><span>Height on screen</span><output id="clockTopOut"></output></div>
+            <input type="range" id="clockTop" min="2" max="40" step="0.5" value="14">
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Save</h2>
+          <label class="field">Name<input type="text" id="wpName" maxlength="32" placeholder="My wallpaper"></label>
+          <p class="err" id="saveError" hidden></p>
+          <div class="row-btns">
+            <button class="btn ghost" id="newPhoto">New photo</button>
+            <button class="btn primary" id="saveBtn">Save &amp; use</button>
+          </div>
+          <p class="ok" id="savedMsg" hidden>Saved and set as your wallpaper. Open a new tab to see it.</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script type="module" src="js/engine.js"></script>
+</body>
+</html>

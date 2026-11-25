@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "BetterTab",
+  "version": "1.4.0",
+  "description": "A TV-style new tab page with a clock behind the mountains and a dock of your own apps.",
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.primevideo.com/*",
+        "*://*.amazon.in/gp/video/*",
+        "*://*.amazon.com/gp/video/*",
+        "*://*.amazon.co.uk/gp/video/*",
+        "*://*.amazon.de/gp/video/*"
+      ],
+      "js": [
+        "js/watch-prime.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://www.youtube.com/*"
+      ],
+      "js": [
+        "js/watch-core.js",
+        "js/watch-youtube.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://www.netflix.com/*"
+      ],
+      "js": [
+        "js/watch-core.js",
+        "js/watch-netflix.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.hotstar.com/*",
+        "*://*.jiohotstar.com/*"
+      ],
+      "js": [
+        "js/watch-core.js",
+        "js/watch-hotstar.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "favicon",
+    "geolocation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  }
+}
