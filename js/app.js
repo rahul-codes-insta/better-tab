@@ -56,7 +56,7 @@ const watchKey = (id) => 'watch:' + id;
 const TYPE_KEYS = ['clockScale', 'clockWeight', 'dateScale', 'dateWeight', 'barScale'];
 
 // Settings that always stay the same in both modes, even with separate setups.
-const SHARED_KEYS = ['searchEngine', 'modesOn', 'splitModes', 'showAdvanced', 'openSections', 'brandfetchId', 'weatherLoc', 'builtinClockTop'];
+const SHARED_KEYS = ['searchEngine', 'searchApps', 'searchNewTab', 'searchRemember', 'searchAnywhere', 'searchHints', 'modesOn', 'splitModes', 'showAdvanced', 'openSections', 'brandfetchId', 'weatherLoc', 'builtinClockTop'];
 
 /**
  * Bring stored state up to date and line it up with the active mode:
@@ -423,11 +423,15 @@ function needsIcon(app) {
   return stale || oldPipeline || upgrade;
 }
 
+// Ids of apps kept in a folder widget in this mode: they're shown there, not on the bar.
+const folderIds = () => new Set((profile().widgets || []).filter((w) => w.type === 'folder').flatMap((w) => w.data?.ids || []));
+const barApps = () => { const f = folderIds(); return profile().apps.filter((a) => !f.has(a.id)); };
+
 async function renderDock() {
-  const apps = profile().apps;
+  const apps = barApps();
   const { barStyle, barCount } = state.settings;
   const drawerMode = barStyle === 'drawer';
-  await loadIcons(apps);
+  await loadIcons(profile().apps);
 
   const animate = booted && !switching;
   const fromW = dock.getBoundingClientRect().width;
@@ -594,6 +598,7 @@ dock.addEventListener('dragstart', (e) => {
   t.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move';
   e.dataTransfer.setData('text/uri-list', t.href);
+  e.dataTransfer.setData('application/x-app-id', dragId); // lets an app folder widget take it
   hideTip();
 });
 dock.addEventListener('dragover', (e) => {
@@ -642,7 +647,7 @@ dock.addEventListener('contextmenu', (e) => {
   if (!t) return;
   e.preventDefault();
   menuApp = findApp(t.dataset.id);
-  const apps = profile().apps;
+  const apps = barApps();
   const idx = apps.indexOf(menuApp);
   menu.querySelector('[data-act="left"]').disabled = idx === 0;
   menu.querySelector('[data-act="right"]').disabled = idx === apps.length - 1;
@@ -675,7 +680,11 @@ menu.addEventListener('click', async (e) => {
       queueIcon(menuApp);
       break;
     case 'left': case 'right': {
-      const j = act === 'left' ? i - 1 : i + 1;
+      // Swap with the neighbour on the bar (skipping apps tucked in folders).
+      const shown = barApps();
+      const k = shown.indexOf(menuApp) + (act === 'left' ? -1 : 1);
+      const j = apps.indexOf(shown[k]);
+      if (j < 0) break;
       [apps[i], apps[j]] = [apps[j], apps[i]];
       save(); await renderDock();
       dock.querySelector(`.tile[data-id="${menuApp.id}"]`)?.focus();
@@ -1010,11 +1019,11 @@ const SETTINGS = [
     id: 'search',
     title: 'Search',
     icon: ICON.search,
-    summary: () => (state.settings.searchOn === false ? 'Off' : `${(ENGINES.find((e) => e.id === state.settings.searchEngine) || ENGINES[0]).name} · finds your apps too`),
+    summary: () => (state.settings.searchOn === false ? 'Off' : `${(ENGINES.find((e) => e.id === state.settings.searchEngine) || ENGINES[0]).name}${state.settings.searchApps === false ? '' : ' · finds your apps too'}`),
     items: [
       {
         type: 'toggle', key: 'searchOn', label: 'Search bar',
-        hint: 'Type anywhere to start. Enter opens the top app, Shift + Enter searches the web.',
+        hint: 'Enter opens the top app, Shift + Enter searches the web.',
         onChange: () => applySearchOn(),
       },
       {
@@ -1025,6 +1034,31 @@ const SETTINGS = [
           if (!sel.options.length) for (const e of ENGINES) sel.add(new Option(e.name, e.id));
           sel.value = state.settings.searchEngine || 'google';
         },
+      },
+      {
+        type: 'toggle', label: 'Remember last service', when: () => state.settings.searchOn !== false,
+        hint: () => (state.settings.searchRemember === false ? 'Each new tab starts with the service above' : 'The one you pick in the search bar becomes the default'),
+        get: () => state.settings.searchRemember !== false, set: (v) => { state.settings.searchRemember = v; save(); },
+      },
+      {
+        type: 'toggle', label: 'Find my apps', when: () => state.settings.searchOn !== false,
+        hint: 'Show your apps that match as you type',
+        get: () => state.settings.searchApps !== false, set: (v) => { state.settings.searchApps = v; save(); }, onChange: () => searchUI.refresh(),
+      },
+      {
+        type: 'segment', label: 'Open in', when: () => state.settings.searchOn !== false,
+        options: [{ value: false, label: 'Same tab' }, { value: true, label: 'New tab' }],
+        get: () => !!state.settings.searchNewTab, set: (v) => { state.settings.searchNewTab = v; save(); },
+      },
+      {
+        type: 'toggle', label: 'Start typing anywhere', when: () => state.settings.searchOn !== false,
+        hint: 'Typing on the page jumps into search. / always works',
+        get: () => state.settings.searchAnywhere !== false, set: (v) => { state.settings.searchAnywhere = v; save(); },
+      },
+      {
+        type: 'toggle', label: 'Keyboard hints', when: () => state.settings.searchOn !== false,
+        hint: 'The Enter / Shift + Enter line under the search bar',
+        get: () => state.settings.searchHints !== false, set: (v) => { state.settings.searchHints = v; save(); }, onChange: () => searchUI.refresh(),
       },
     ],
   },
@@ -1166,6 +1200,7 @@ function setClockTop(v) {
 
 async function exportBackup() {
   const all = await store.getAll();
+  for (const k of Object.keys(all)) if (k.startsWith('pinterest:')) delete all[k]; // sign-in and cached pins stay on this computer
   const blob = new Blob([JSON.stringify({ horizonNewTab: 1, ...all }, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1667,6 +1702,7 @@ function watchCard(svc, rec) {
 /* ============================ search ============================ */
 
 const searchEl = $('#search');
+let tabEngine = null;
 const searchUI = createSearch({
   root: searchEl,
   // Apps from every mode, the current mode's first, without duplicates.
@@ -1676,8 +1712,15 @@ const searchUI = createSearch({
     return order.flatMap((p) => p.apps).filter((a) => (seen.has(a.url) ? false : seen.add(a.url)));
   },
   iconFor: (a) => iconSrc(a),
-  getEngine: () => state?.settings?.searchEngine || 'google',
-  setEngine: (id) => { state.settings.searchEngine = id; save(); },
+  // With "Remember last service" off, a pick in the bar lasts for this tab only.
+  getEngine: () => tabEngine || state?.settings?.searchEngine || 'google',
+  setEngine: (id) => { if (state.settings.searchRemember === false) tabEngine = id; else { tabEngine = null; state.settings.searchEngine = id; save(); } },
+  getOptions: () => ({
+    apps: state?.settings?.searchApps !== false,
+    newTab: !!state?.settings?.searchNewTab,
+    anywhere: state?.settings?.searchAnywhere !== false,
+    hints: state?.settings?.searchHints !== false,
+  }),
 });
 function applySearchOn() {
   const hide = state.settings.searchOn === false;
@@ -1699,6 +1742,8 @@ const widgets = createWidgetLayer({
   layer: widgetLayer,
   getList: () => (profile().widgets = profile().widgets || []),
   save,
+  getSettings: () => state.settings,
+  apps: { all: () => profile().apps, onBar: barApps, icon: iconSrc, changed: () => renderDock() },
   // Imaginary rounded rectangle: under the mode switcher, above the Keep watching cards and bar.
   getBounds: () => {
     const topEl = $('#profiles').hidden ? $('#nightBtn') : $('#profiles');

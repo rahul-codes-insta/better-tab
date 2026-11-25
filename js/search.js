@@ -45,7 +45,7 @@ function score(app, q) {
   return i === q.length ? 30 : 0;                                   // letters in order
 }
 
-export function createSearch({ root, getApps, iconFor, getEngine, setEngine }) {
+export function createSearch({ root, getApps, iconFor, getEngine, setEngine, getOptions = () => ({}) }) {
   root.innerHTML = `
     <div class="sr-results" id="srResults" aria-live="polite"><div class="sr-label">Apps</div><div class="sr-apps" role="listbox"></div></div>
     <div class="sr-menu" id="srMenu" role="listbox" aria-label="Search with"></div>
@@ -126,7 +126,7 @@ export function createSearch({ root, getApps, iconFor, getEngine, setEngine }) {
   function update() {
     const q = input.value.trim().toLowerCase();
     const key = q;
-    matches = q ? getApps()
+    matches = q && getOptions().apps !== false ? getApps()
       .map((a) => ({ a, s: score(a, q) }))
       .filter((x) => x.s > 0)
       .sort((x, y) => y.s - x.s)
@@ -164,7 +164,7 @@ export function createSearch({ root, getApps, iconFor, getEngine, setEngine }) {
   function renderHint() {
     const q = input.value.trim();
     const e = engine();
-    if (!q) { hint.innerHTML = ''; root.classList.remove('has-hint'); return; }
+    if (!q || getOptions().hints === false) { hint.innerHTML = ''; root.classList.remove('has-hint'); return; }
     root.classList.add('has-hint');
     const app = matches[sel];
     hint.innerHTML = app
@@ -174,7 +174,9 @@ export function createSearch({ root, getApps, iconFor, getEngine, setEngine }) {
   }
 
   /* ---------- go ---------- */
-  function go(url) { location.assign(url); }       // opens in this tab
+  function go(url) {
+    if (getOptions().newTab) { window.open(url, '_blank', 'noopener'); close(true); input.blur(); } else location.assign(url);
+  }
   async function search() {
     const q = input.value.trim();
     if (!q) return;
@@ -213,8 +215,8 @@ export function createSearch({ root, getApps, iconFor, getEngine, setEngine }) {
   // Start typing anywhere on the page to search.
   document.addEventListener('keydown', (e) => {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (document.querySelector('dialog[open]') || e.target.closest?.('input, textarea, [contenteditable]')) return;
-    if (e.key === '/' || (e.key.length === 1 && /\S/.test(e.key))) {
+    if (document.querySelector('dialog[open]') || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    if (e.key === '/' || (getOptions().anywhere !== false && e.key.length === 1 && /\S/.test(e.key))) {
       if (e.key === '/') e.preventDefault();
       input.focus();
     }
