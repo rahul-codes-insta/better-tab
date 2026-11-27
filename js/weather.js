@@ -18,6 +18,34 @@ export async function fetchCurrent(lat, lon, unit = 'celsius') {
   return { temp: c.temperature_2m, code: c.weather_code ?? 0, isDay: c.is_day !== 0 };
 }
 
+// Current conditions, the rest of the day hour by hour, and the next days.
+export async function fetchForecast(lat, lon, unit = 'celsius') {
+  const u = new URL(FORECAST);
+  u.searchParams.set('latitude', lat.toFixed(3));
+  u.searchParams.set('longitude', lon.toFixed(3));
+  u.searchParams.set('current', 'temperature_2m,weather_code,is_day');
+  u.searchParams.set('hourly', 'temperature_2m,weather_code,is_day');
+  u.searchParams.set('daily', 'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset');
+  u.searchParams.set('forecast_days', '7');
+  u.searchParams.set('temperature_unit', unit === 'fahrenheit' ? 'fahrenheit' : 'celsius');
+  u.searchParams.set('timezone', 'auto');
+  const r = await fetch(u, { credentials: 'omit' });
+  if (!r.ok) throw new Error('Weather unavailable');
+  const j = await r.json();
+  const c = j.current || {};
+  const h = j.hourly || {};
+  const d = j.daily || {};
+  const hourly = (h.time || []).map((time, i) => ({
+    time, temp: h.temperature_2m?.[i], code: h.weather_code?.[i] ?? 0, isDay: h.is_day?.[i] !== 0,
+  }));
+  const daily = (d.time || []).map((date, i) => ({
+    date, code: d.weather_code?.[i] ?? 0,
+    high: d.temperature_2m_max?.[i], low: d.temperature_2m_min?.[i],
+    sunrise: d.sunrise?.[i], sunset: d.sunset?.[i],
+  }));
+  return { temp: c.temperature_2m, code: c.weather_code ?? 0, isDay: c.is_day !== 0, hourly, daily };
+}
+
 export async function searchCities(query) {
   const u = new URL(GEOCODE);
   u.searchParams.set('name', query.trim());

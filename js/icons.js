@@ -282,7 +282,7 @@ function roundRectPath(g, x, y, w, h, r) {
  * Turn any image into an opaque square app icon (returned as a PNG data URL).
  * `kind` hints how much padding a transparent logo needs.
  */
-export function renderTile(img, kind = 'site') {
+export function renderTile(img, kind = 'site', { keep = false } = {}) {
   const c = document.createElement('canvas');
   c.width = c.height = SIZE;
   const g = c.getContext('2d');
@@ -323,8 +323,55 @@ export function renderTile(img, kind = 'site') {
     if (size <= 32) g.imageSmoothingEnabled = scale !== Math.floor(scale);
     g.drawImage(img, (SIZE - w * scale) / 2, (SIZE - h * scale) / 2, w * scale, h * scale);
   }
-  if (img._objectUrl) URL.revokeObjectURL(img._objectUrl);
+  if (!keep && img._objectUrl) URL.revokeObjectURL(img._objectUrl);
   return c.toDataURL('image/png');
+}
+
+// The artwork on its own. App Store images come as JPEGs with a white mat around the
+// rounded icon, so a near-white colour touching the edge is cleared.
+function renderBare(img) {
+  const c = document.createElement('canvas');
+  c.width = c.height = SIZE;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingQuality = 'high';
+  const size = imgSize(img);
+  const w = img.naturalWidth || SIZE, h = img.naturalHeight || SIZE;
+  const share = size <= 32 ? 0.8 : 1;
+  let s = Math.min((SIZE * share) / w, (SIZE * share) / h);
+  if (size <= 32) { g.imageSmoothingEnabled = false; s = Math.max(1, Math.round(s)); }
+  g.drawImage(img, (SIZE - w * s) / 2, (SIZE - h * s) / 2, w * s, h * s);
+  const image = g.getImageData(0, 0, SIZE, SIZE);
+  if (clearWhiteEdge(image)) g.putImageData(image, 0, 0);
+  return c.toDataURL('image/png');
+}
+
+function clearWhiteEdge(image) {
+  const d = image.data, w = image.width, n = w * w;
+  const at = (x, y) => (y * w + x) * 4;
+  let r = 0, g = 0, b = 0;
+  for (const i of [at(1, 1), at(w - 2, 1), at(1, w - 2), at(w - 2, w - 2)]) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+  r /= 4; g /= 4; b /= 4;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  if (lum < 0.9 || (mx ? (mx - mn) / mx : 0) > 0.12) return false;
+  const near = (i) => d[i + 3] > 200 && Math.abs(d[i] - r) < 28 && Math.abs(d[i + 1] - g) < 28 && Math.abs(d[i + 2] - b) < 28;
+  const seen = new Uint8Array(n);
+  const q = [];
+  const push = (x, y) => {
+    if (x < 0 || y < 0 || x >= w || y >= w) return;
+    const p = y * w + x;
+    if (seen[p] || !near(p * 4)) return;
+    seen[p] = 1;
+    d[p * 4 + 3] = 0;
+    q.push(p);
+  };
+  for (let x = 0; x < w; x++) { push(x, 0); push(x, w - 1); }
+  for (let y = 1; y < w - 1; y++) { push(0, y); push(w - 1, y); }
+  for (let k = 0; k < q.length; k++) {
+    const p = q[k], x = p % w, y = (p / w) | 0;
+    push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1);
+  }
+  return true;
 }
 
 const LETTER_COLORS = [
@@ -360,7 +407,7 @@ export function letterTile(name) {
  * Returns { kind: 'remote', url, source } for Brandfetch (hotlinked)
  *      or { kind: 'data', dataUrl, source } for anything cached locally.
  */
-export async function resolveIcon(pageUrl, { brandfetchId = '', skipBrandfetch = false, page = null, name = '' } = {}) {
+export async function resolveIcon(pageUrl, { brandfetchId = '', skipBrandfetch = false, page = null, name = '', withBare = false } = {}) {
   // Brandfetch is checked after the App Store and the site's own app icon.
   const brandfetch = brandfetchId && !skipBrandfetch
     ? async () => {
@@ -368,10 +415,10 @@ export async function resolveIcon(pageUrl, { brandfetchId = '', skipBrandfetch =
       return (await probeHotlink(url, 64)) ? { kind: 'remote', url, source: 'brandfetch' } : null;
     }
     : null;
-  return resolveLocalIcon(pageUrl, { page, name, afterOwnIcon: brandfetch });
+  return resolveLocalIcon(pageUrl, { page, name, afterOwnIcon: brandfetch, withBare });
 }
 
-export async function resolveLocalIcon(pageUrl, { page = null, name = '', afterOwnIcon = null } = {}) {
+export async function resolveLocalIcon(pageUrl, { page = null, name = '', afterOwnIcon = null, withBare = false } = {}) {
   page = page || (await scanPage(pageUrl));
   const domain = domainOf(pageUrl);
   const ranked = page.trusted === false ? [] : rankCandidates(page.candidates || []);
@@ -380,7 +427,10 @@ export async function resolveLocalIcon(pageUrl, { page = null, name = '', afterO
     try {
       const img = await loadImage(url);
       if (imgSize(img) < min) { if (img._objectUrl) URL.revokeObjectURL(img._objectUrl); return null; }
-      return { kind: 'data', dataUrl: renderTile(img, kind), source: kind };
+      const dataUrl = renderTile(img, kind, { keep: true });
+      const bare = withBare ? renderBare(img) : undefined;
+      if (img._objectUrl) URL.revokeObjectURL(img._objectUrl);
+      return { kind: 'data', dataUrl, source: kind, bare };
     } catch { return null; }
   };
 

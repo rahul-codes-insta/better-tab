@@ -1,4 +1,16 @@
-# BetterTab
+<p align="center"><img src="assets/logo.png" width="128" height="128" alt="BetterTab logo"></p>
+
+<h1 align="center">BetterTab</h1>
+
+<p align="center">A calm, TV-style new tab page for Chrome: a big clock tucked behind the mountains, a dock of your own apps, and widgets that stay out of the way.</p>
+
+## Features
+- **App bar:** add any site by link and its icon is found for you. Drag to reorder, Bar or Drawer style, separate apps per mode (Chill, Work and more).
+- **Search:** one box for your apps and the web, with Google, Claude, ChatGPT, Perplexity and more.
+- **Widgets:** To-do, World clock, App folder, Pinterest and more. Drag them anywhere or snap them to the edges; each has its own compact settings (gear or right-click).
+- **Keep watching:** pick up where you left off on Prime Video, Netflix and JioHotstar.
+- **3D wallpapers:** turn your own photo into a wallpaper with the clock behind the subject, processed on your computer.
+- **Weather, night mode, 12/24-hour clock,** and everything stays in your browser.
 
 ## Install
 1. Unzip this folder somewhere permanent (Chrome loads it from there).
@@ -23,7 +35,7 @@ Order tried:
 5. Favicon, then a letter tile
 Transparent or small icons are placed on a solid tile so everything looks like an app icon.
 
-## Keep watching (Prime Video)
+## Keep watching (Prime Video, Netflix, JioHotstar)
 While you watch Prime Video in this Chrome browser, the extension notes the show,
 episode, poster and how far in you are (from the video player itself), saved only
 on this computer. The new tab then shows a "Keep watching" card above the app bar

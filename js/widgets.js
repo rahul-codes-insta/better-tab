@@ -2,18 +2,47 @@
 //
 // To add a widget type, add an entry to WIDGET_TYPES:
 //   name, description, icon (svg), create() → initial data, mount(body, widget, api),
+//   optional size: one of WIDGET_SIZES (otherwise 2×4),
+//   optional sizes: the sizes it makes sense in, e.g. ['2x2', '2x4'] (otherwise all four),
 //   optional settings(widget) → extra rows for the widget's gear menu, each one of
 //     { label, get(), set(v) }                 a toggle
 //     { label, text: true, get(), set(v) }     a text field
 //     { label, run() }                         a button (closes the menu)
-//   optional fit: true → the card shrinks to its content instead of the usual width.
+// Every widget uses the same four sizes on one grid. Do not invent a new width.
+//   2×2 small square, 2×4 wide (4 cells across, 2 down), 4×4 large square, 6×4 extra wide.
+// 8×4 would cover the clock on a laptop, so the widest is 6×4.
+// A 2×2 is about a fifth of the window's height, and the gap is a tenth of that.
+// Widgets snap to the grid unless "Move widgets freely" is on in Settings.
 // api: { save(), setCount(text), settings(), apps }
 import { uiConfirm } from './ui-dialog.js';
 import * as P from './pinterest.js';
+import { extraWidgets } from './widgets-more.js';
+
+export const WIDGET_SIZES = [['2x2', '2×2'], ['2x4', '2×4'], ['4x4', '4×4'], ['6x4', '6×4']];
+const LEGACY_SIZE = { s: '2x2', m: '2x4', l: '4x4', xl: '6x4' };
+const CELLS = { '2x2': [2, 2], '2x4': [4, 2], '4x4': [4, 4], '6x4': [6, 4] }; // [across, down]
+// The sizes a widget type offers (optional `sizes` on its entry), in WIDGET_SIZES order.
+const sizesOf = (type) => WIDGET_SIZES.filter(([id]) => !WIDGET_TYPES[type]?.sizes || WIDGET_TYPES[type].sizes.includes(id));
+function applySize(w) {
+  if (LEGACY_SIZE[w.size]) w.size = LEGACY_SIZE[w.size];
+  if (!sizesOf(w.type).some(([id]) => id === w.size)) w.size = WIDGET_TYPES[w.type]?.size || sizesOf(w.type)[0][0];
+  delete w.shape; // every widget is the soft shape now
+  delete w.hideButtons; // settings live in the right-click menu
+  return w.size;
+}
+
+// Themes: a widget's own look (optional `theme: { name }` on its type, styled with
+// .widget.type-<id>.theme-own) and then Glass, Dark and Clear (`noClear: true` drops Clear).
+function themesOf(type) {
+  return [...(type.theme ? [['own', type.theme.name]] : []), ['glass', 'Glass'], ['dark', 'Dark'], ...(type.noClear ? [] : [['clear', 'Clear']])];
+}
+function lookOf(w) {
+  const type = WIDGET_TYPES[w.type];
+  const ok = themesOf(type).map(([id]) => id);
+  return ok.includes(w.bg) ? w.bg : ok[0];
+}
 
 const uid = () => Math.random().toString(36).slice(2, 10);
-const SNAP = 140;        // px from an edge that snaps a widget to it
-const TOP = 84;          // where the edge stacks start
 
 const ICONS = {
   todo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12.2l2.3 2.3 4.7-4.9"/></svg>',
@@ -38,33 +67,67 @@ export const WIDGET_TYPES = {
   /* ---------- to-do ---------- */
   todo: {
     name: 'To-do',
-    description: 'Tasks you can star, edit, drag into order and tick off, with an optional progress bar.',
+    description: 'A checklist. Add it again for another list.',
     icon: ICONS.todo,
-    create: () => ({ items: [] }),
+    sizes: ['2x2', '2x4', '4x4'],
+    theme: { name: 'White' },
+    create: () => ({ items: [], title: 'To-do' }),
     mount(body, w, api) {
       const d = w.data;
       if (d.hideDone) { d.completed = 'hide'; delete d.hideDone; } // older setting
+      if (d.completed === 'hide') d.completed = 'remove';
+      if (d.completed === 'stay') d.completed = 'bottom';
+      if (!d.title) d.title = 'To-do';
+      const widget = body.closest('.widget');
+      widget.classList.add('todo-widget');
+      const name = widget.querySelector('.w-name');
+      name.contentEditable = 'true';
+      name.spellcheck = false;
+      name.title = 'Click to rename';
+      name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); name.blur(); } });
+      name.addEventListener('blur', () => {
+        const v = name.textContent.replace(/\s+/g, ' ').trim().slice(0, 32) || 'To-do';
+        name.textContent = v;
+        if (v !== d.title) { d.title = v; api.save(); }
+      });
+      // Shows on hover, and always while the list is empty. While adding, it's the tick that saves.
+      const PLUS = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>';
+      const TICK = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" d="M5.5 12.5l4.2 4.2 8.8-9.2"/></svg>';
+      const plus = document.createElement('button');
+      plus.type = 'button';
+      plus.className = 'todo-fab';
+      widget.append(plus);
       body.innerHTML = `
         <div class="todo-progress" hidden><span></span></div>
-        <ul class="todo-list"></ul>
-        <form class="todo-add"><span class="todo-plus" aria-hidden="true">+</span><input type="text" placeholder="Add a task" maxlength="120" aria-label="Add a task"></form>
-        <button type="button" class="todo-clear" hidden>Clear completed</button>`;
+        <div class="todo-scroll">
+          <ul class="todo-list"></ul>
+          <form class="todo-add" hidden><input type="text" placeholder="New task" maxlength="120" aria-label="New task"></form>
+        </div>`;
+      const scroller = body.querySelector('.todo-scroll');
       const list = body.querySelector('.todo-list');
       const form = body.querySelector('.todo-add');
       const input = form.querySelector('input');
-      const clear = body.querySelector('.todo-clear');
       const progress = body.querySelector('.todo-progress');
       const items = () => (d.items = d.items || []);
-      const completed = () => d.completed || 'bottom'; // bottom | stay | hide
+      const removeDone = () => d.completed === 'remove';
       let dragId = null;
 
-      // Starred first, then the list's own order; finished tasks sink (or hide).
+      // Starred first, then the list's own order; finished tasks sink to the bottom.
       function visible() {
-        const rank = (x) => (x.done && completed() === 'bottom' ? 2 : 0) + (x.star && !x.done && d.starFirst !== false ? -1 : 0);
-        return items().filter((x) => !(x.done && completed() === 'hide'))
-          .map((x, i) => [x, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((p) => p[0]);
+        const rank = (x) => (x.done ? 2 : 0) + (x.star && !x.done && d.starFirst !== false ? -1 : 0);
+        return items().map((x, i) => [x, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((p) => p[0]);
       }
       const commit = () => { api.save(); draw(); };
+      // A finished task is crossed off first, then sinks or goes away.
+      function toggle(li, it) {
+        it.done = !it.done;
+        api.save();
+        li.classList.toggle('done', it.done);
+        clearTimeout(li.settle);
+        li.settle = setTimeout(() => {
+          if (it.done && removeDone()) { d.items = items().filter((x) => x !== it); commit(); } else draw();
+        }, it.done ? 650 : 0);
+      }
 
       function draw() {
         list.innerHTML = '';
@@ -73,13 +136,25 @@ export const WIDGET_TYPES = {
           const li = document.createElement('li');
           li.className = 'todo-item' + (it.done ? ' done' : '') + (it.star ? ' starred' : '');
           li.draggable = true;
-          li.innerHTML = `<button type="button" class="todo-check" aria-label="${it.done ? 'Mark not done' : 'Mark done'}"></button><span class="todo-text" title="Double-click to edit"></span><button type="button" class="todo-star" aria-pressed="${!!it.star}" aria-label="${it.star ? 'Unstar task' : 'Star task'}">${ICONS.star}</button><button type="button" class="todo-del" aria-label="Delete task">${ICONS.x}</button>`;
+          li.innerHTML = `<span class="todo-check" aria-hidden="true"></span><span class="todo-text"></span><button type="button" class="todo-star" aria-pressed="${!!it.star}" aria-label="${it.star ? 'Unstar task' : 'Star task'}">${ICONS.star}</button><button type="button" class="todo-del" aria-label="Delete task">${ICONS.x}</button>`;
+          li.setAttribute('role', 'checkbox');
+          li.setAttribute('aria-checked', String(!!it.done));
+          li.tabIndex = 0;
           const text = li.querySelector('.todo-text');
           text.textContent = it.text;
-          li.querySelector('.todo-check').addEventListener('click', () => { it.done = !it.done; commit(); });
+          text.title = it.text + ' · Double-click to edit';
+          // One click finishes it; a double-click edits it instead.
+          let clickTimer;
+          li.addEventListener('click', (e) => {
+            if (e.target.closest('button, input')) return;
+            clearTimeout(clickTimer);
+            if (e.detail > 1) return;
+            clickTimer = setTimeout(() => toggle(li, it), 220);
+          });
+          li.addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && e.target === li) { e.preventDefault(); toggle(li, it); } });
           li.querySelector('.todo-star').addEventListener('click', () => { it.star = !it.star; commit(); });
           li.querySelector('.todo-del').addEventListener('click', () => { d.items = items().filter((x) => x !== it); commit(); });
-          text.addEventListener('dblclick', () => edit(li, it));
+          text.addEventListener('dblclick', () => { clearTimeout(clickTimer); edit(li, it); });
           // drag to reorder
           li.addEventListener('dragstart', (e) => { dragId = it.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', it.text); li.classList.add('dragging'); });
           li.addEventListener('dragend', () => { dragId = null; draw(); });
@@ -101,13 +176,40 @@ export const WIDGET_TYPES = {
           list.append(li);
         }
         const total = items().length, done = items().filter((x) => x.done).length;
-        api.setCount(total ? (done === total ? 'All done' : `${total - done} left`) : '');
-        clear.hidden = !done;
-        clear.textContent = completed() === 'hide' ? `Clear ${done} hidden completed` : 'Clear completed';
+        api.setCount(!d.count || !total ? '' : done === total ? 'All done' : `${total - done} left`);
         list.hidden = !shown.length;
+        widget.classList.toggle('todo-empty', !total);
         progress.hidden = !d.progress || !total;
         progress.firstElementChild.style.width = total ? `${(done / total) * 100}%` : '0';
+        requestAnimationFrame(fit);
       }
+
+      // When the tasks don't fit, the list scrolls and stops halfway through a row, so it's
+      // clear there's more. The space after the last row keeps it clear of the corner button.
+      function fit() {
+        const top = scroller.scrollTop;
+        scroller.classList.remove('scrolls');
+        scroller.style.height = '';
+        const content = list.offsetHeight + (form.hidden ? 0 : form.offsetHeight + 4);
+        const avail = scroller.clientHeight;
+        const row = list.firstElementChild?.offsetHeight;
+        if (content > avail + 1 && row) {
+          scroller.classList.add('scrolls');
+          scroller.style.height = (Math.max(1, Math.floor((avail - row / 2) / row)) + 0.5) * row + 'px';
+        }
+        scroller.scrollTop = top;
+      }
+      new ResizeObserver(() => fit()).observe(body);
+
+      function setAdding(on) {
+        form.hidden = !on;
+        widget.classList.toggle('adding', on);
+        plus.innerHTML = on ? TICK : PLUS;
+        plus.title = on ? 'Save task' : 'Add a task';
+        plus.setAttribute('aria-label', plus.title);
+        fit();
+      }
+      setAdding(false);
 
       function edit(li, it) {
         const text = li.querySelector('.todo-text');
@@ -135,6 +237,13 @@ export const WIDGET_TYPES = {
         field.addEventListener('blur', () => finish(true));
       }
 
+      const reveal = () => requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+      plus.addEventListener('pointerdown', (e) => { if (!form.hidden) e.preventDefault(); }); // keep typing focus
+      plus.addEventListener('click', () => {
+        if (form.hidden) { setAdding(true); input.focus(); reveal(); return; }
+        if (input.value.trim()) form.requestSubmit();
+        else setAdding(false);
+      });
       form.addEventListener('submit', (e) => {
         e.preventDefault();
         const text = input.value.trim();
@@ -143,17 +252,22 @@ export const WIDGET_TYPES = {
         if (d.newOnTop) items().unshift(it); else items().push(it);
         input.value = '';
         commit();
+        input.focus();
+        reveal();
       });
-      clear.addEventListener('click', () => { d.items = items().filter((x) => !x.done); commit(); });
+      input.addEventListener('blur', () => { if (!input.value.trim()) setAdding(false); });
+      input.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); input.value = ''; setAdding(false); input.blur(); } });
       draw();
     },
     chips: (w) => [
-      { label: 'Progress', get: () => !!w.data.progress, set: (v) => { w.data.progress = v; } },
-      { label: 'Stars first', get: () => w.data.starFirst !== false, set: (v) => { w.data.starFirst = v; } },
+      { label: 'Tasks left', title: 'How many are left, next to the title', get: () => !!w.data.count, set: (v) => { w.data.count = v; } },
+      { label: 'Progress bar', get: () => !!w.data.progress, set: (v) => { w.data.progress = v; } },
     ],
     settings: (w) => [
-      { label: 'New tasks', choice: [['top', 'Top'], ['bottom', 'Bottom']], get: () => (w.data.newOnTop ? 'top' : 'bottom'), set: (v) => { w.data.newOnTop = v === 'top'; } },
-      { label: 'Done tasks', choice: [['bottom', 'Sink'], ['stay', 'Keep'], ['hide', 'Hide']], get: () => w.data.completed || 'bottom', set: (v) => { w.data.completed = v; } },
+      { label: 'List name', text: true, max: 32, placeholder: 'To-do', get: () => w.data.title, set: (v) => { w.data.title = v || 'To-do'; } },
+      { label: 'New tasks go', choice: [['top', 'Top'], ['bottom', 'Bottom']], get: () => (w.data.newOnTop ? 'top' : 'bottom'), set: (v) => { w.data.newOnTop = v === 'top'; } },
+      { label: 'Done tasks', hint: 'Click a task to finish it', choice: [['bottom', 'Sink'], ['remove', 'Remove']], get: () => (w.data.completed === 'remove' ? 'remove' : 'bottom'), set: (v) => { w.data.completed = v; } },
+      { label: 'Starred tasks first', get: () => w.data.starFirst !== false, set: (v) => { w.data.starFirst = v; } },
       {
         actions: [
           { label: 'Clear done', disabled: () => !(w.data.items || []).some((x) => x.done), run: () => { w.data.items = w.data.items.filter((x) => !x.done); } },
@@ -172,7 +286,7 @@ export const WIDGET_TYPES = {
   /* ---------- world clock ---------- */
   worldclock: {
     name: 'World clock',
-    description: 'Up to 4 cities with their time, date, day or night, and how far ahead or behind they are. Pick cities in its settings.',
+    description: 'Times for up to 4 cities.',
     icon: ICONS.clock,
     create: () => ({ clocks: [{ tz: 'America/New_York' }, { tz: 'Europe/London' }] }),
     mount(body, w, api) {
@@ -194,7 +308,9 @@ export const WIDGET_TYPES = {
           li.querySelector('.wc-city').textContent = c.label || cityOf(c.tz);
           list.append(li);
         }
-        list.style.setProperty('--cols', Math.min(2, rows().length || 1));
+        const n = rows().length || 1;
+        const across = w.size === '6x4' ? 4 : w.size === '2x2' ? 1 : 2;
+        list.style.setProperty('--cols', String(d.layout === 'grid' ? Math.min(across, n) : w.size === '2x4' || w.size === '6x4' ? Math.min(2, n) : 1));
         list.hidden = !rows().length;
         empty.hidden = !!rows().length;
         api.setCount('');
@@ -246,25 +362,27 @@ export const WIDGET_TYPES = {
     settings: (w) => {
       const d = migrateClock(w.data);
       return [
-        { custom: (box, changed) => cityEditor(box, d, changed) },
+        { label: 'Cities', hint: 'Rename a city by typing over it', custom: (box, changed) => cityEditor(box, d, changed) },
         { label: 'Layout', choice: [['list', 'List'], ['grid', 'Grid']], get: () => d.layout || 'list', set: (v) => { d.layout = v; } },
-        { label: 'Format', title: 'Auto follows the main clock', choice: [['auto', 'Auto'], ['12', '12h'], ['24', '24h']], get: () => d.format || 'auto', set: (v) => { d.format = v; } },
+        { label: 'Time format', hint: 'Auto follows the main clock', choice: [['auto', 'Auto'], ['12', '12h'], ['24', '24h']], get: () => d.format || 'auto', set: (v) => { d.format = v; } },
       ];
     },
   },
 
   /* ---------- app folder ---------- */
+  // Grows on its own: 2×2 holds 4 apps, then 2×4, 4×4, 6×4. No Size setting.
   folder: {
     name: 'App folder',
-    description: 'Group apps into a folder. Drag apps here from the bar, or use Add apps in its settings. Apps in a folder leave the bar.',
+    description: 'Group apps from the bar into a folder.',
     icon: ICONS.folder,
-    fit: true,
+    size: '2x2',
+    sizes: ['2x2', '2x4', '4x4', '6x4'],
+    dynamicSize: true,
     create: () => ({ ids: [] }),
     mount(body, w, api) {
       const d = w.data;
-      body.innerHTML = '<div class="fd-grid"></div><div class="fd-pick" hidden></div>';
+      body.innerHTML = '<div class="fd-grid"></div>';
       const grid = body.querySelector('.fd-grid');
-      const pick = body.querySelector('.fd-pick');
       const all = () => api.apps?.all() || [];
       // Drop ids of apps that were deleted since.
       const mine = () => (d.ids = (d.ids || []).filter((id) => all().some((a) => a.id === id)));
@@ -274,12 +392,20 @@ export const WIDGET_TYPES = {
 
       function put(id) {
         if (!id || mine().includes(id) || !all().some((a) => a.id === id)) return;
+        const before = w.size;
+        if (!api.fitFolder?.(mine().length + 1)) return; // grows if needed; refuses when there's no room
         d.ids.push(id);
-        changed();
+        api.save();
+        api.apps.changed();
+        if (w.size !== before) api.refresh?.(); // rebuild so the widget's size class updates
+        else draw();
       }
       function draw() {
         grid.innerHTML = '';
-        grid.className = `fd-grid size-${d.size || 'm'}` + (d.hideNames ? ' no-names' : '');
+        const n = mine().length;
+        const cap = api.folderCap?.(w.size) ?? 4;
+        const full = n >= cap;
+        grid.className = `fd-grid icon-${d.size || 'm'}` + (d.hideNames ? ' no-names' : '');
         for (const id of mine()) {
           const app = all().find((a) => a.id === id);
           const a = document.createElement('a');
@@ -318,35 +444,19 @@ export const WIDGET_TYPES = {
           });
           grid.append(a);
         }
-        // The + tile shows only while the folder is empty or you're picking apps,
-        // so the card is exactly as big as the apps in it.
-        if (!mine().length || !pick.hidden) {
+        // + while there's a free slot (or while picking). When full, Add app is on right-click.
+        if (!full) {
           const add = document.createElement('button');
           add.type = 'button';
           add.className = 'fd-app fd-add';
-          add.setAttribute('aria-expanded', String(!pick.hidden));
-          add.innerHTML = `<span class="fd-plus" aria-hidden="true">${pick.hidden ? '+' : '✓'}</span><span class="fd-name">${pick.hidden ? 'Add' : 'Done'}</span>`;
-          add.addEventListener('click', () => { pick.hidden = !pick.hidden; draw(); });
+          add.setAttribute('aria-label', 'Add apps');
+          add.innerHTML = '<span class="fd-plus" aria-hidden="true">+</span><span class="fd-name">Add</span>';
+          add.addEventListener('click', () => api.openPicker?.());
           grid.append(add);
         }
-        grid.style.setProperty('--cols', Math.min(Math.min(d.cols || 4, 4), Math.max(1, grid.children.length)));
-        api.setCount(mine().length ? `${mine().length} app${mine().length === 1 ? '' : 's'}` : '');
-        drawPicker();
-      }
-      function drawPicker() {
-        if (pick.hidden) return;
-        const free = api.apps.onBar();
-        pick.innerHTML = free.length ? '' : `<p class="fd-empty">${all().length ? 'All your apps are already in folders.' : 'No apps yet. Add some with + first.'}</p>`;
-        for (const app of free) {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.className = 'fd-pick-row';
-          b.append(appIcon(app));
-          b.insertAdjacentHTML('beforeend', '<span></span>');
-          b.lastChild.textContent = app.name;
-          b.addEventListener('click', () => put(app.id));
-          pick.append(b);
-        }
+        grid.style.setProperty('--cols', String(api.folderCols?.(w.size) ?? 2));
+        grid.style.setProperty('--rows', String(api.folderRows?.(w.size) ?? 2));
+        api.setCount(n ? `${n} app${n === 1 ? '' : 's'}` : '');
       }
       // Drag an app from the bar onto the folder.
       const card = () => body.closest('.widget');
@@ -364,21 +474,18 @@ export const WIDGET_TYPES = {
         e.preventDefault();
         put(id);
       });
-      if (w._pick) { delete w._pick; pick.hidden = false; } // "Add apps" from the gear menu
       draw();
     },
-    // Extra on/off pills for the widget's "Show" row.
-    chips: (w) => [
-      { label: 'App names', get: () => !w.data.hideNames, set: (v) => { w.data.hideNames = !v; } },
-    ],
+    ownName: true, // its own "Show folder name" switch instead of the generic Name pill
     settings: (w, ctx) => [
       { label: 'Folder name', text: true, placeholder: 'App folder', get: () => w.data.title, set: (v) => { w.data.title = v; } },
-      { label: 'Per row', choice: [['2', '2'], ['3', '3'], ['4', '4']], get: () => String(Math.min(w.data.cols || 4, 4)), set: (v) => { w.data.cols = +v; } },
-      { label: 'Icon size', choice: [['s', 'S'], ['m', 'M'], ['l', 'L']], get: () => w.data.size || 'm', set: (v) => { w.data.size = v; } },
+      { label: 'Show folder name', hint: 'Off hides the folder’s title bar', get: () => w.showName !== false, set: (v) => { w.showName = v; } },
+      { label: 'Show app names', hint: 'Icons shrink a little to make room', get: () => !w.data.hideNames, set: (v) => { w.data.hideNames = !v; } },
       { label: 'Open apps in a new tab', get: () => !!w.data.newTab, set: (v) => { w.data.newTab = v; } },
+      { label: 'Icon size', choice: [['s', 'S'], ['m', 'M'], ['l', 'L']], get: () => w.data.size || 'm', set: (v) => { w.data.size = v; } },
       {
         actions: [
-          { label: 'Add apps…', run: () => { w._pick = true; } },
+          { label: 'Add apps…', run: () => { setTimeout(() => ctx.openPicker?.(), 0); } },
           { label: 'All back to bar', disabled: () => !(w.data.ids || []).length, run: () => { w.data.ids = []; ctx.apps?.changed(); } },
         ],
       },
@@ -389,10 +496,13 @@ export const WIDGET_TYPES = {
 /* ---------- Pinterest ---------- */
 const pinMemo = new Map(); // widget id -> last pins, so a settings change redraws instantly
 
+Object.assign(WIDGET_TYPES, extraWidgets);
+
 WIDGET_TYPES.pinterest = {
   name: 'Pinterest',
-  description: 'The newest pins from Pinterest accounts and boards you pick, or from everyone you follow when you sign in.',
+  description: 'Fresh pins from boards or accounts you pick.',
   icon: ICONS.pin,
+  size: '4x4',
   create: () => ({ source: 'links', links: [], count: 6, layout: 'grid', every: 60, titles: false }),
   mount(body, w, api) {
     const d = w.data;
@@ -411,11 +521,13 @@ WIDGET_TYPES.pinterest = {
     function draw() {
       if (!pins.length) return;
       const layout = d.layout || 'grid';
-      const shown = layout === 'grid' ? pins.slice(0, d.count || 6) : [pins[slide % pins.length]];
+      const room = w.size === '2x2' ? 1 : w.size === '2x4' ? 3 : w.size === '6x4' ? 10 : 6;
+      const cols = w.size === '2x2' ? 1 : w.size === '6x4' ? 5 : 3;
+      const shown = layout === 'grid' ? pins.slice(0, room) : [pins[slide % pins.length]];
       box.innerHTML = '';
       const wrap = document.createElement('div');
       wrap.className = `pn-${layout === 'grid' ? 'grid' : 'one'}` + (d.titles ? ' titles' : '') + (d.showSource ? ' sources' : '');
-      if (layout === 'grid') wrap.style.setProperty('--cols', (d.count || 6) === 4 ? 2 : 3);
+      if (layout === 'grid') wrap.style.setProperty('--cols', String(cols));
       for (const p of shown) {
         const a = document.createElement('a');
         a.className = 'pn-pin';
@@ -481,9 +593,8 @@ WIDGET_TYPES.pinterest = {
   settings: (w) => [
     { label: 'Pins from', redraw: true, choice: [['links', 'Links'], ['account', 'My account']], get: () => w.data.source || 'links', set: (v) => { w.data.source = v; } },
     { custom: (box, changed, redraw) => ((w.data.source === 'account' ? accountEditor : linkEditor)(box, w, changed, redraw)) },
-    { label: 'Layout', choice: [['grid', 'Grid'], ['one', 'Large'], ['slides', 'Slides']], get: () => w.data.layout || 'grid', set: (v) => { w.data.layout = v; } },
-    { label: 'Pins', title: 'How many pins the grid shows', choice: [['4', '4'], ['6', '6'], ['9', '9']], get: () => String(w.data.count || 6), set: (v) => { w.data.count = +v; } },
-    { label: 'Refresh', choice: [['30', '30m'], ['60', '1h'], ['180', '3h']], get: () => String(w.data.every || 60), set: (v) => { w.data.every = +v; } },
+    { label: 'Layout', hint: 'The widget size decides how many pins fit', choice: [['grid', 'Grid'], ['one', 'One'], ['slides', 'Slides']], get: () => w.data.layout || 'grid', set: (v) => { w.data.layout = v; } },
+    { label: 'Check for new pins', choice: [['30', '30m'], ['60', '1h'], ['180', '3h']], get: () => String(w.data.every || 60), set: (v) => { w.data.every = +v; } },
     { actions: [{ label: 'Refresh now', run: () => { pinMemo.delete(w.id); w._force = true; } }] },
   ],
 };
@@ -747,22 +858,131 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       y: Math.min(Math.max(b.top, y), Math.max(b.top, b.bottom - h)),
     };
   }
-  layer.innerHTML = '<div class="w-col left"></div><div class="w-col right"></div><div class="w-free"></div><div class="w-guide left"></div><div class="w-guide right"></div>';
-  const cols = { left: layer.querySelector('.w-col.left'), right: layer.querySelector('.w-col.right') };
+  layer.innerHTML = '<div class="w-free"></div><div class="w-zone"></div>';
   const free = layer.querySelector('.w-free');
   const mounted = new Map(); // id -> element
+
+  /* ---------- the grid ---------- */
+  const gridOn = () => !getSettings?.()?.widgetsFree;
+  const cellsOf = (w, size = w.size) => CELLS[size] || CELLS['2x4'];
+  const cellsEl = document.createElement('div');
+  cellsEl.className = 'w-grid';
+  const slot = document.createElement('div');
+  slot.className = 'w-slot';
+  free.before(cellsEl, slot); // under the widgets
+  let gridKey = '';
+  function grid() {
+    // Start from a 2×2 about a fifth of the window tall, then grow the cells a little
+    // so the columns fill the width exactly, edge to edge with the top buttons.
+    const b = bounds();
+    const width = b.right - b.left;
+    const small = Math.min(212, Math.max(150, innerHeight * 0.2));
+    const ratio = 2 / 9; // gap ÷ cell, so the gap is a tenth of a 2×2
+    const across = Math.max(2, Math.floor((width / (small * 0.45) + ratio) / (1 + ratio)));
+    const unit = width / (across + (across - 1) * ratio);
+    const gap = unit * ratio;
+    layer.style.setProperty('--wu', unit + 'px');
+    layer.style.setProperty('--wg', gap + 'px');
+    const pitch = unit + gap;
+    const down = Math.max(2, Math.floor((b.bottom - b.top + gap) / pitch));
+    const left = b.left;
+    const g = { across, down, left, top: b.top, pitch, unit, gap };
+    const key = `${across}:${down}:${left}:${b.top}:${pitch}`;
+    if (key !== gridKey) {
+      gridKey = key;
+      cellsEl.style.cssText = `left:${left}px;top:${b.top}px;grid-template-columns:repeat(${across},${unit}px);grid-auto-rows:${unit}px;gap:${gap}px`;
+      cellsEl.innerHTML = '<span></span>'.repeat(across * down);
+      Object.assign(layer.querySelector('.w-zone').style, {
+        left: left + 'px', top: b.top + 'px', width: width + 'px', height: (b.bottom - b.top) + 'px',
+      });
+    }
+    return g;
+  }
+  function takenBy(list, except) {
+    const set = new Set();
+    for (const x of list) {
+      if (x === except || x.gx == null) continue;
+      const [cw, ch] = cellsOf(x);
+      for (let i = 0; i < cw; i++) for (let j = 0; j < ch; j++) set.add(`${x.gx + i},${x.gy + j}`);
+    }
+    return set;
+  }
+  function fitsAt(g, taken, x, y, cw, ch) {
+    if (x < 0 || y < 0 || x + cw > g.across || y + ch > g.down) return false;
+    for (let i = 0; i < cw; i++) for (let j = 0; j < ch; j++) if (taken.has(`${x + i},${y + j}`)) return false;
+    return true;
+  }
+  // The free spot closest to (x, y), or null when the widget fits nowhere.
+  function nearestSpot(g, taken, x, y, cw, ch) {
+    let best = null, bestD = Infinity;
+    for (let gy = 0; gy + ch <= g.down; gy++) {
+      for (let gx = 0; gx + cw <= g.across; gx++) {
+        const d = (gx - x) ** 2 + (gy - y) ** 2;
+        if (d < bestD && fitsAt(g, taken, gx, gy, cw, ch)) { best = { x: gx, y: gy }; bestD = d; }
+      }
+    }
+    return best;
+  }
+  // Where a widget wants to be: its cell, or for older layouts, near its old edge or spot.
+  function wantOf(g, w, cw) {
+    if (w.gx != null) return { x: w.gx, y: w.gy };
+    if (w.dock === 'left') return { x: 0, y: 0 };
+    if (w.dock === 'right') return { x: g.across - cw, y: 0 };
+    return { x: Math.round(((w.x ?? 0.7) * innerWidth - g.left) / g.pitch), y: Math.round(((w.y ?? 0.2) * innerHeight - g.top) / g.pitch) };
+  }
+  function spotFor(g, w, size = w.size) {
+    const [cw, ch] = cellsOf(w, size);
+    const taken = takenBy(getList(), w);
+    const want = wantOf(g, w, cw);
+    return fitsAt(g, taken, want.x, want.y, cw, ch) ? want : nearestSpot(g, taken, want.x, want.y, cw, ch);
+  }
+  const cellPx = (g, p) => ({ x: g.left + p.x * g.pitch, y: g.top + p.y * g.pitch });
+  // App folder: how many apps fit, and the next size up when it's full.
+  const FOLDER_SIZES = ['2x2', '2x4', '4x4', '6x4'];
+  const folderCols = (size) => (size === '6x4' ? 6 : size === '2x2' ? 2 : 4);
+  const folderRows = (size) => (size === '2x2' || size === '2x4' ? 2 : 4);
+  const folderCap = (size) => folderCols(size) * folderRows(size);
+  // Grow the folder until it can hold n apps. False when the page has no room.
+  function fitFolder(w, n) {
+    while (folderCap(w.size) < n) {
+      const i = FOLDER_SIZES.indexOf(w.size);
+      if (i < 0 || i >= FOLDER_SIZES.length - 1) { showNoRoom(); return false; }
+      if (!resizeTo(w, FOLDER_SIZES[i + 1])) return false;
+    }
+    return true;
+  }
+
+  // Size changes from the gear menu. False when the bigger size has no room.
+  function resizeTo(w, size) {
+    if (!gridOn()) { w.size = size; return true; }
+    const g = grid();
+    const p = spotFor(g, w, size);
+    if (!p) { showNoRoom(); return false; }
+    w.size = size; w.gx = p.x; w.gy = p.y;
+    return true;
+  }
 
   function build(w) {
     const type = WIDGET_TYPES[w.type];
     const el = document.createElement('section');
-    el.className = 'widget' + (type.fit ? ' fit' : '') + (w.showName === false ? ' no-name' : '') + (w.hideButtons ? ' no-buttons' : '') + (w.bg && w.bg !== 'glass' ? ' bg-' + w.bg : '');
+    applySize(w);
+    const look = lookOf(w);
+    el.className = `widget type-${w.type} size-${w.size}`
+      + (w.showName === false ? ' no-name' : '')
+      + (look === 'own' ? ' theme-own' : look !== 'glass' ? ' bg-' + look : '');
     el.dataset.id = w.id;
-    // Every widget gets this same header: icon, name, a bare move grip and a bare settings gear (styled in styles.css "Widget controls").
-    el.innerHTML = `<header class="w-head"><span class="w-icon">${type.icon}</span><span class="w-name"></span><span class="w-count"></span><button type="button" class="w-move" aria-label="Move widget" title="Drag to move">${ICONS.grip}</button><button type="button" class="w-gear" aria-label="Widget settings" aria-haspopup="dialog" title="Settings">${ICONS.gear}</button></header><div class="w-body"></div>`;
+    // Every widget gets this same header: icon, name, count. Settings open from the right-click menu.
+    el.innerHTML = `<header class="w-head" title="Drag to move · Right-click for settings"><span class="w-icon">${type.icon}</span><span class="w-name"></span><span class="w-count"></span></header><div class="w-body"></div>`;
     el.querySelector('.w-name').textContent = w.data.title || type.name;
     const count = el.querySelector('.w-count');
-    type.mount(el.querySelector('.w-body'), w, { save, settings: getSettings, apps, setCount: (t) => { count.textContent = t; }, openSettings: () => openMenu(w, el.querySelector('.w-gear')) });
-    el.querySelector('.w-gear').addEventListener('click', (e) => openMenu(w, e.currentTarget));
+    type.mount(el.querySelector('.w-body'), w, {
+      save, settings: getSettings, apps,
+      setCount: (t) => { count.textContent = t; },
+      openSettings: () => openMenu(w),
+      folderCap, folderCols, folderRows, fitFolder: (n) => fitFolder(w, n),
+      openPicker: (at) => openPicker(w, at),
+      refresh: () => refresh(w),
+    });
     enableDrag(el, w);
     return el;
   }
@@ -783,8 +1003,9 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     const el = build(w);
     old.replaceWith(el);
     mounted.set(w.id, el);
-    if (w.dock === 'free') { el.classList.add('free'); place(el, w); }
-    if (menuFor === w) el.querySelector('.w-gear').setAttribute('aria-expanded', 'true');
+    if (gridOn()) render();
+    else if (w.dock === 'free') { el.classList.add('free'); place(el, w); }
+    if (menuFor === w) { el.classList.add('w-editing'); placeMenu(w); }
   }
 
   /* ---------- settings menu (one, shared by every widget) ---------- */
@@ -795,58 +1016,144 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
   menu.hidden = true;
   document.body.append(menu);
   let menuFor = null;
-  const gearOf = (w) => mounted.get(w?.id)?.querySelector('.w-gear');
-  function closeMenu(focus = false) {
+  function closeMenu() {
     if (menu.hidden) return;
-    const g = gearOf(menuFor);
-    g?.setAttribute('aria-expanded', 'false');
+    mounted.get(menuFor?.id)?.classList.remove('w-editing');
     menu.hidden = true;
     menuFor = null;
-    if (focus) g?.focus();
   }
-  document.addEventListener('pointerdown', (e) => { if (!menu.contains(e.target) && !e.target.closest?.('.w-gear')) closeMenu(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(true); });
+  document.addEventListener('pointerdown', (e) => { if (!menu.contains(e.target)) closeMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
-  function openMenu(w, btn, at = null) {
-    if (menuFor === w && !at) return closeMenu();
+  function openMenu(w, at = null) {
     closeMenu();
     menuFor = w;
-    btn.setAttribute('aria-expanded', 'true');
+    mounted.get(w.id)?.classList.add('w-editing');
     drawMenu(w);
     menu.hidden = false;
-    // Next to the gear, or at the pointer when opened from the right-click menu / with the gear hidden.
-    const g = btn.getBoundingClientRect();
-    const b = at || !g.width ? { right: (at?.clientX ?? g.right), top: (at?.clientY ?? g.top), bottom: (at?.clientY ?? g.bottom) } : g;
-    const mw = menu.offsetWidth, mh = menu.offsetHeight;
-    menu.style.left = Math.max(8, Math.min(b.right - mw, innerWidth - mw - 8)) + 'px';
-    const below = b.bottom + 6, above = b.top - 6 - mh;
-    menu.style.top = (below + mh <= innerHeight - 8 ? below : above >= 8 ? above : Math.max(8, innerHeight - mh - 8)) + 'px';
-    menu.querySelector('input, button:not(:disabled), select')?.focus();
+    placeMenu(w, at);
+    menu.querySelector('input, button:not(:disabled), select')?.focus({ preventScroll: true });
+  }
+
+  // Beside the widget (the side with more room) so changes stay visible while you make them.
+  function placeMenu(w, at = null, box = menu) {
+    const el = mounted.get(w.id);
+    const mw = box.offsetWidth, mh = box.offsetHeight, gap = 12;
+    const clampTop = (t) => Math.max(8, Math.min(t, innerHeight - mh - 8));
+    const r = el?.getBoundingClientRect();
+    if (r?.width) {
+      const roomR = innerWidth - r.right - gap - 8, roomL = r.left - gap - 8;
+      if (roomR >= mw || roomL >= mw) {
+        box.style.left = (roomR >= roomL ? r.right + gap : r.left - gap - mw) + 'px';
+        box.style.top = clampTop(r.top) + 'px';
+        return;
+      }
+      const left = Math.max(8, Math.min(r.left, innerWidth - mw - 8)) + 'px';
+      if (innerHeight - r.bottom - gap - 8 >= mh) { box.style.left = left; box.style.top = r.bottom + gap + 'px'; return; }
+      if (r.top - gap - 8 >= mh) { box.style.left = left; box.style.top = r.top - gap - mh + 'px'; return; }
+    }
+    // No room around it: at the pointer, or over the widget's corner.
+    const x = at?.clientX ?? r?.right ?? innerWidth / 2;
+    const y = at?.clientY ?? r?.top ?? 8;
+    box.style.left = Math.max(8, Math.min(x - mw, innerWidth - mw - 8)) + 'px';
+    box.style.top = clampTop(y) + 'px';
   }
 
   function drawMenu(w) {
     const type = WIDGET_TYPES[w.type];
-    // Everything that's just on/off sits in one "Show" row of pills.
+    // The widget's own settings first, then how it looks. On/off things share one row of pills.
+    const own = type.settings?.(w, { apps, openPicker: () => openPicker(w) }) || [];
+    const sizes = sizesOf(w.type);
     const rows = [
-      ...(type.settings?.(w, { apps }) || []),
-      {
-        label: 'Show',
-        chips: [
-          { label: 'Name', get: () => w.showName !== false, set: (v) => { w.showName = v; } },
-          { label: 'Buttons', title: 'The move and settings buttons. Right-click works either way', get: () => !w.hideButtons, set: (v) => { w.hideButtons = !v; } },
-          ...(type.chips?.(w) || []),
-        ],
-        hint: () => (w.hideButtons ? 'Buttons hidden: right-click the widget for Settings and Move' : ''),
-      },
-      { label: 'Background', choice: [['glass', 'Glass'], ['dark', 'Dark'], ['clear', 'Clear']], get: () => w.bg || 'glass', set: (v) => { w.bg = v; } },
+      ...own,
+      { section: 'Look' },
+      ...(!type.dynamicSize && sizes.length > 1 ? [{ label: 'Size', choice: sizes, redraw: true, get: () => w.size, set: (v) => { resizeTo(w, v); } }] : []),
+      { label: 'Theme', choice: themesOf(type), get: () => lookOf(w), set: (v) => { w.bg = v; } },
     ];
+    const chips = [
+      ...(type.ownName ? [] : [{ label: 'Name', get: () => w.showName !== false, set: (v) => { w.showName = v; } }]),
+      ...(type.chips?.(w) || []),
+    ];
+    if (chips.length) rows.push({ label: 'Show', chips });
     menu.innerHTML = '';
-    const title = document.createElement('div');
-    title.className = 'w-menu-title';
-    title.textContent = w.data.title || type.name;
-    menu.append(title);
+    const head = document.createElement('div');
+    head.className = 'w-menu-head';
+    head.innerHTML = `<span class="w-menu-icon">${type.icon}</span><div class="w-menu-titles"><div class="w-menu-title"></div><div class="w-menu-kind"></div></div>`;
+    head.querySelector('.w-menu-title').textContent = w.data.title || type.name;
+    head.querySelector('.w-menu-kind').textContent = w.data.title && w.data.title !== type.name ? type.name : 'Widget settings';
+    menu.append(head);
     for (const it of rows) menu.append(menuRow(w, it));
-    menu.append(menuRow(w, { actions: [{ label: 'Remove widget', danger: true, run: () => remove(w), keepClosed: true }] }));
+    const foot = menuRow(w, { actions: [{ label: 'Remove widget', danger: true, run: () => remove(w), keepClosed: true }] });
+    foot.classList.add('w-menu-foot');
+    menu.append(foot);
+  }
+
+  /* ---------- App folder: "Add apps" popup (same look as the settings menu) ---------- */
+  const picker = document.createElement('div');
+  picker.className = 'menu w-menu fd-picker';
+  picker.setAttribute('role', 'dialog');
+  picker.setAttribute('aria-label', 'Add apps to the folder');
+  picker.hidden = true;
+  document.body.append(picker);
+  let pickFor = null;
+  function closePicker() {
+    if (picker.hidden) return;
+    mounted.get(pickFor?.id)?.classList.remove('w-editing');
+    picker.hidden = true;
+    pickFor = null;
+  }
+  document.addEventListener('pointerdown', (e) => { if (!picker.contains(e.target) && !e.target.closest?.('.fd-add')) closePicker(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePicker(); });
+
+  function openPicker(w, at = null) {
+    if (pickFor === w) return closePicker();
+    closeMenu(); closePicker();
+    pickFor = w;
+    mounted.get(w.id)?.classList.add('w-editing');
+    picker.innerHTML = `
+      <div class="w-menu-head"><span class="w-menu-icon">${WIDGET_TYPES.folder.icon}</span><div class="w-menu-titles"><div class="w-menu-title">Add apps</div><div class="w-menu-kind"></div></div></div>
+      <input type="search" class="w-input fd-find" placeholder="Search your apps" aria-label="Search your apps" autocomplete="off" spellcheck="false">
+      <div class="fd-pick-list" role="listbox" aria-multiselectable="true"></div>
+      <div class="s-row w-actions w-menu-foot"><button type="button" class="w-menu-btn fd-done">Done</button></div>`;
+    picker.querySelector('.w-menu-kind').textContent = `to ${w.data.title || 'App folder'}`;
+    const find = picker.querySelector('.fd-find');
+    find.addEventListener('input', () => drawPicker(w));
+    picker.querySelector('.fd-done').addEventListener('click', closePicker);
+    drawPicker(w);
+    picker.hidden = false;
+    placeMenu(w, at, picker);
+    find.focus({ preventScroll: true });
+  }
+
+  // This folder's apps (ticked) and the apps on the bar, filtered by the search box.
+  function drawPicker(w) {
+    const list = picker.querySelector('.fd-pick-list');
+    const q = picker.querySelector('.fd-find').value.trim().toLowerCase();
+    const mine = (w.data.ids || []).filter((id) => apps.all().some((a) => a.id === id));
+    const rows = [...mine.map((id) => apps.all().find((a) => a.id === id)), ...apps.onBar()]
+      .filter((a) => !q || a.name.toLowerCase().includes(q));
+    list.innerHTML = rows.length ? '' : `<p class="fd-empty">${q ? 'No app matches that.' : apps.all().length ? 'All your apps are in other folders.' : 'No apps yet. Add some to the bar with + first.'}</p>`;
+    for (const app of rows) {
+      const on = mine.includes(app.id);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'fd-pick-row';
+      b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', String(on));
+      b.innerHTML = '<img alt="" draggable="false"><span></span><i class="fd-tick" aria-hidden="true"></i>';
+      b.querySelector('img').src = apps.icon(app);
+      b.querySelector('span').textContent = app.name;
+      b.addEventListener('click', () => {
+        const ids = w.data.ids = (w.data.ids || []).filter((id) => apps.all().some((a) => a.id === id));
+        if (on) w.data.ids = ids.filter((id) => id !== app.id);
+        else { if (!fitFolder(w, ids.length + 1)) return; ids.push(app.id); }
+        save(); apps.changed(); refresh(w);
+        mounted.get(w.id)?.classList.add('w-editing');
+        drawPicker(w);
+        placeMenu(w, null, picker);
+      });
+      list.append(b);
+    }
   }
 
   // Rows are built from the main Settings page's own pieces (s-row, s-title, s-hint, toggle, s-seg).
@@ -867,6 +1174,12 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       if (it.title) l.title = it.title;
       return l;
     };
+    if (it.note) {
+      const p = document.createElement('p');
+      p.className = 'w-menu-note';
+      p.textContent = it.note;
+      return p;
+    }
     if (it.section) {
       const h = document.createElement('div');
       h.className = 'w-menu-section';
@@ -874,9 +1187,14 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       return h;
     }
     if (it.custom) {
+      const row = document.createElement('div');
+      row.className = 's-row w-wrap w-custom';
+      if (it.label) row.append(labelBlock());
       const box = document.createElement('div');
       it.custom(box, () => { save(); refresh(w); }, () => { if (menuFor === w) drawMenu(w); });
-      return box;
+      box.classList.add('w-custom-box');
+      row.append(box);
+      return row;
     }
     if (it.chips) {
       const row = document.createElement('div');
@@ -914,10 +1232,10 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       b.textContent = it.label;
       b.disabled = !!it.disabled?.();
       b.addEventListener('click', async () => {
-        closeMenu();
-        if (it.keepClosed) return it.run();
+        if (it.keepClosed) { closeMenu(); return it.run(); }
         await it.run();
         save(); refresh(w);
+        if (menuFor === w) drawMenu(w);
       });
       return b;
     }
@@ -950,7 +1268,7 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       row.classList.add('w-wrap');
       input.type = 'text';
       input.className = 'w-input';
-      input.maxLength = 40;
+      input.maxLength = it.max || 40;
       input.value = it.get() || '';
       input.placeholder = it.placeholder || '';
       input.addEventListener('change', () => commit(input.value.trim()));
@@ -969,22 +1287,54 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     const list = getList();
     const ids = new Set(list.map((w) => w.id));
     for (const [id, el] of mounted) if (!ids.has(id)) { el.remove(); mounted.delete(id); }
-    for (const side of ['left', 'right']) {
-      list.filter((w) => w.dock === side).sort((a, b) => a.order - b.order).forEach((w) => {
-        const el = mounted.get(w.id) || build(w);
-        mounted.set(w.id, el);
-        el.classList.remove('free');
-        el.style.left = el.style.top = '';
-        cols[side].append(el);
-      });
+    layer.classList.toggle('grid-mode', gridOn());
+    if (gridOn()) return renderGrid(list);
+    grid(); // keeps the cell size current in free mode too
+    // Free mode has no edge stacks: anything still stacked gets its own spot once.
+    const stacked = list.filter((x) => x.dock !== 'free');
+    if (stacked.length) {
+      const g = grid();
+      for (const w of stacked) {
+        const p = spotFor(g, w) || wantOf(g, w, cellsOf(w)[0]);
+        const at = cellPx(g, p);
+        w.gx = p.x; w.gy = p.y;
+        w.dock = 'free'; w.x = at.x / innerWidth; w.y = at.y / innerHeight;
+      }
+      save();
     }
-    for (const w of list.filter((x) => x.dock === 'free')) {
+    for (const w of list) {
       const el = mounted.get(w.id) || build(w);
       mounted.set(w.id, el);
       el.classList.add('free');
       free.append(el);
       place(el, w);
     }
+  }
+
+  // Placed widgets first, so older ones without a cell fill in around them.
+  function renderGrid(list) {
+    const g = grid();
+    let changed = false;
+    const order = [...list].sort((a, b) => (a.gx == null) - (b.gx == null) || (a.order ?? 0) - (b.order ?? 0));
+    const placed = [];
+    for (const w of order) {
+      const el = mounted.get(w.id) || build(w);
+      mounted.set(w.id, el);
+      const [cw, ch] = cellsOf(w);
+      const taken = takenBy(placed);
+      const want = wantOf(g, w, cw);
+      let p = fitsAt(g, taken, want.x, want.y, cw, ch) ? want : nearestSpot(g, taken, want.x, want.y, cw, ch);
+      if (p && (w.gx !== p.x || w.gy !== p.y)) { w.gx = p.x; w.gy = p.y; changed = true; }
+      // No room on this window size: keep it on screen rather than hide it.
+      if (!p) p = { x: Math.max(0, Math.min(want.x, g.across - cw)), y: Math.max(0, Math.min(want.y, g.down - ch)) };
+      placed.push({ gx: p.x, gy: p.y, size: w.size });
+      el.classList.add('free');
+      free.append(el);
+      const px = cellPx(g, p);
+      el.style.left = px.x + 'px';
+      el.style.top = px.y + 'px';
+    }
+    if (changed) save();
   }
 
   // Free widgets are stored as fractions of the window so they keep their spot on resize.
@@ -994,99 +1344,153 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     el.style.left = p.x + 'px';
     el.style.top = p.y + 'px';
   }
-  addEventListener('resize', () => getList().filter((w) => w.dock === 'free').forEach((w) => mounted.has(w.id) && place(mounted.get(w.id), w)));
+  addEventListener('resize', () => {
+    if (gridOn()) return render();
+    grid();
+    getList().filter((w) => w.dock === 'free').forEach((w) => mounted.has(w.id) && place(mounted.get(w.id), w));
+  });
 
   /* ---------- moving ---------- */
-  // By the move handle (press and drag), or from the right-click menu's Move
-  // ("pickup": the widget follows the pointer until you click; Esc puts it back).
+  // The top of the widget is the handle. Buttons, fields, and the title stay clickable.
+  const toast = document.createElement('div');
+  toast.className = 'w-toast';
+  toast.setAttribute('role', 'status');
+  toast.textContent = 'No space for this widget';
+  layer.append(toast);
+  let toastTimer;
+  function showNoRoom() {
+    toast.classList.add('in');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('in'), 2200);
+  }
   function enableDrag(el, w) {
-    el.querySelector('.w-move').addEventListener('pointerdown', (e) => {
+    el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      if (e.target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
+      const top = el.getBoundingClientRect().top;
+      if (e.clientY - top > 44) return;
       e.preventDefault();
       startMove(el, w, e);
     });
   }
 
-  function startMove(el, w, e, pickup = false) {
+  function settle(el, from) {
+    const to = el.getBoundingClientRect();
+    const dx = from.left - to.left;
+    const dy = from.top - to.top;
+    if (Math.abs(dx) < 1.5 && Math.abs(dy) < 1.5) return;
+    el.style.transition = 'none';
+    el.style.transform = `translate(${dx}px, ${dy}px) scale(1.028)`;
+    el.classList.add('settling');
+    requestAnimationFrame(() => {
+      el.style.transition = '';
+      el.style.transform = '';
+      const done = (ev) => {
+        if (ev.propertyName !== 'transform') return;
+        el.classList.remove('settling');
+        el.removeEventListener('transitionend', done);
+      };
+      el.addEventListener('transitionend', done);
+    });
+  }
+  function showZones(on) {
+    layer.classList.toggle('moving', on);
+  }
+
+  function startMove(el, w, e) {
     const r = el.getBoundingClientRect();
-    const dx = pickup ? Math.min(r.width / 2, 48) : e.clientX - r.left;
-    const dy = pickup ? 18 : e.clientY - r.top;
-    // Track the pointer on the whole window: lifting the widget out of its stack
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    // Track the pointer on the whole window: lifting the widget onto the layer
     // (below) would cancel pointer capture, and a fast mouse would leave it behind.
     const pid = e.pointerId;
+    el.classList.remove('settling');
+    el.style.transform = '';
     el.classList.add('dragging');
-    if (pickup) el.classList.add('picked');
     el.style.width = r.width + 'px';
     el.style.left = r.left + 'px';
     el.style.top = r.top + 'px';
-    layer.append(el); // lift it out of its stack
-    let side = null;
+    layer.append(el); // above the other widgets while it moves
+    const snapping = gridOn();
+    const g = grid();
+    const [cw, ch] = cellsOf(w);
+    const taken = takenBy(getList(), w);
+    // Letting go without moving puts it back where it was.
+    let target = snapping && w.gx != null && fitsAt(g, taken, w.gx, w.gy, cw, ch) ? { x: w.gx, y: w.gy } : null;
+    if (snapping) {
+      slot.style.width = (cw * g.pitch - g.gap) + 'px';
+      slot.style.height = (ch * g.pitch - g.gap) + 'px';
+    }
+    showZones(true);
 
     const move = (ev) => {
-      if (!pickup && ev.pointerId !== pid) return;
+      if (ev.pointerId !== pid) return;
       const p = clampTo(ev.clientX - dx, ev.clientY - dy, r.width, r.height); // stays inside the widget area
       el.style.left = p.x + 'px';
       el.style.top = p.y + 'px';
-      side = ev.clientX < SNAP ? 'left' : ev.clientX > innerWidth - SNAP ? 'right' : null;
-      layer.classList.toggle('snap-left', side === 'left');
-      layer.classList.toggle('snap-right', side === 'right');
-      markInsert(side, ev.clientY);
+      if (!snapping) return;
+      const x = Math.round((p.x - g.left) / g.pitch);
+      const y = Math.round((p.y - g.top) / g.pitch);
+      target = fitsAt(g, taken, x, y, cw, ch) ? { x, y } : nearestSpot(g, taken, x, y, cw, ch);
+      cellsEl.style.setProperty('--mx', ev.clientX - g.left + 'px');
+      cellsEl.style.setProperty('--my', ev.clientY - g.top + 'px');
+      slot.classList.toggle('on', !!target);
+      if (target) {
+        const at = cellPx(g, target);
+        slot.style.transform = `translate(${at.x}px, ${at.y}px)`;
+      }
     };
     const cleanup = () => {
       removeEventListener('pointermove', move);
       removeEventListener('pointerup', up);
       removeEventListener('pointercancel', up);
-      removeEventListener('pointerdown', drop, true);
       removeEventListener('keydown', key, true);
       document.body.classList.remove('dragging-widget');
-      layer.classList.remove('snap-left', 'snap-right');
-      clearInsert();
-      el.classList.remove('dragging', 'picked');
+      showZones(false);
+      slot.classList.remove('on');
+      el.classList.remove('dragging');
       el.style.width = '';
     };
-    const finish = (ev) => {
+    const finish = () => {
+      const from = el.getBoundingClientRect();
       cleanup();
-      const list = getList();
-      if (side) {
-        // Insert into the edge stack at the pointer's height.
-        const stack = list.filter((x) => x.dock === side && x !== w).sort((a, b) => a.order - b.order);
-        let idx = stack.length;
-        for (let i = 0; i < stack.length; i++) {
-          const sr = mounted.get(stack[i].id)?.getBoundingClientRect();
-          if (sr && ev.clientY < sr.top + sr.height / 2) { idx = i; break; }
-        }
-        stack.splice(idx, 0, w);
-        stack.forEach((x, i) => { x.order = i; });
-        w.dock = side;
-      } else {
-        const nr = el.getBoundingClientRect();
+      if (!snapping) {
+        // Free mode: it stays exactly where you let go.
         w.dock = 'free';
-        w.x = nr.left / innerWidth;
-        w.y = nr.top / innerHeight;
-      }
-      save(); render();
+        w.x = from.left / innerWidth;
+        w.y = from.top / innerHeight;
+        w.gx = Math.max(0, Math.round((from.left - g.left) / g.pitch));
+        w.gy = Math.max(0, Math.round((from.top - g.top) / g.pitch));
+        save();
+      } else if (target) {
+        const at = cellPx(g, target);
+        w.gx = target.x; w.gy = target.y;
+        w.dock = 'free'; w.x = at.x / innerWidth; w.y = at.y / innerHeight; // where "Move freely" picks up
+        save();
+      } else showNoRoom();
+      render();
+      settle(el, from);
     };
-    const up = (ev) => { if (ev.pointerId === pid) finish(ev); };
-    const drop = (ev) => { ev.preventDefault(); ev.stopPropagation(); finish(ev); };
-    const key = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); cleanup(); render(); } };
+    const up = (ev) => { if (ev.pointerId === pid) finish(); };
+    const key = (ev) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault(); ev.stopPropagation();
+      const from = el.getBoundingClientRect();
+      cleanup(); render();
+      settle(el, from);
+    };
     addEventListener('pointermove', move);
-    if (pickup) {
-      addEventListener('pointerdown', drop, true);
-      addEventListener('keydown', key, true);
-      move(e);
-    } else {
-      addEventListener('pointerup', up);
-      addEventListener('pointercancel', up);
-    }
+    addEventListener('pointerup', up);
+    addEventListener('pointercancel', up);
+    addEventListener('keydown', key, true);
     document.body.classList.add('dragging-widget'); // no text selection while dragging
   }
 
-  /* ---------- right-click menu: always has Settings and Move ---------- */
+  /* ---------- right-click menu ---------- */
   const ctxMenu = document.createElement('div');
   ctxMenu.className = 'menu';
   ctxMenu.setAttribute('role', 'menu');
   ctxMenu.hidden = true;
-  ctxMenu.innerHTML = '<button type="button" role="menuitem" data-act="settings">Settings…</button><button type="button" role="menuitem" data-act="move">Move</button><hr><button type="button" role="menuitem" data-act="remove" class="danger">Remove widget</button>';
   document.body.append(ctxMenu);
   let ctxFor = null, ctxAt = null;
   const closeCtx = () => { ctxMenu.hidden = true; };
@@ -1101,6 +1505,10 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     closeMenu();
     ctxFor = w;
     ctxAt = { clientX: e.clientX, clientY: e.clientY, pointerId: -1 };
+    // Folder: Add app first when the grid is full (no + tile left).
+    const folderFull = w.type === 'folder' && (w.data.ids || []).length >= folderCap(w.size);
+    ctxMenu.innerHTML = (folderFull ? '<button type="button" role="menuitem" data-act="add-app">Add app</button><hr>' : '')
+      + '<button type="button" role="menuitem" data-act="settings">Settings…</button><hr><button type="button" role="menuitem" data-act="remove" class="danger">Remove widget</button>';
     ctxMenu.hidden = false;
     const mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
     ctxMenu.style.left = Math.min(e.clientX, innerWidth - mw - 8) + 'px';
@@ -1112,27 +1520,27 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     const w = ctxFor;
     if (!act || !w) return;
     closeCtx();
-    const el = mounted.get(w.id);
-    if (!el) return;
-    if (act === 'settings') openMenu(w, el.querySelector('.w-gear'), ctxAt);
-    if (act === 'move') startMove(el, w, ctxAt, true);
+    if (act === 'settings') openMenu(w, ctxAt);
     if (act === 'remove') remove(w);
+    if (act === 'add-app') {
+      openPicker(w, ctxAt);
+    }
   });
 
-  function clearInsert() { layer.querySelectorAll('.insert-before, .insert-after').forEach((x) => x.classList.remove('insert-before', 'insert-after')); }
-  function markInsert(side, y) {
-    clearInsert();
-    if (!side) return;
-    const els = [...cols[side].children];
-    if (!els.length) return;
-    const target = els.find((x) => { const r = x.getBoundingClientRect(); return y < r.top + r.height / 2; });
-    if (target) target.classList.add('insert-before'); else els[els.length - 1].classList.add('insert-after');
-  }
-
+  // New widgets go in the free spot nearest the top right.
   function add(type) {
     const list = getList();
-    const right = list.filter((x) => x.dock === 'right');
-    const w = { id: 'w_' + uid(), type, dock: 'right', order: right.length, x: 0.7, y: 0.2, data: WIDGET_TYPES[type].create() };
+    const spec = WIDGET_TYPES[type];
+    const w = { id: 'w_' + uid(), type, dock: 'free', data: spec.create() };
+    if (spec.size) w.size = spec.size;
+    if (spec.hideName) w.showName = false;
+    applySize(w);
+    const g = grid();
+    const [cw, ch] = cellsOf(w);
+    const p = nearestSpot(g, takenBy(list), g.across - cw, 0, cw, ch);
+    if (!p) return showNoRoom();
+    const at = cellPx(g, p);
+    w.gx = p.x; w.gy = p.y; w.x = at.x / innerWidth; w.y = at.y / innerHeight;
     list.push(w);
     save(); render();
     const el = mounted.get(w.id);
@@ -1144,4 +1552,3 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
   return { render, add, reset: () => { for (const el of mounted.values()) el.remove(); mounted.clear(); render(); } };
 }
 
-export const TOP_OFFSET = TOP;

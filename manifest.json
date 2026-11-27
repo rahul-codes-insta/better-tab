@@ -22,16 +22,6 @@
     },
     {
       "matches": [
-        "*://www.youtube.com/*"
-      ],
-      "js": [
-        "js/watch-core.js",
-        "js/watch-youtube.js"
-      ],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": [
         "*://www.netflix.com/*"
       ],
       "js": [
@@ -64,6 +54,7 @@
   ],
   "icons": {
     "16": "assets/icon16.png",
+    "32": "assets/icon32.png",
     "48": "assets/icon48.png",
     "128": "assets/icon128.png"
   },

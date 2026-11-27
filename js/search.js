@@ -77,8 +77,16 @@ export function createSearch({ root, getApps, iconFor, getEngine, setEngine, get
   }
 
   /* ---------- open / close with a liquid squish ---------- */
+  // The placeholder changes while the bar morphs, so it's hidden until the shape settles.
+  let phTimer;
+  function hidePlaceholder() {
+    root.classList.add('ph-wait');
+    clearTimeout(phTimer);
+    phTimer = setTimeout(() => root.classList.remove('ph-wait'), 380);
+  }
   function open() {
     if (root.classList.contains('open')) return;
+    hidePlaceholder();
     root.classList.add('open');
     bar.classList.remove('squish');
     void bar.offsetWidth;
@@ -87,6 +95,7 @@ export function createSearch({ root, getApps, iconFor, getEngine, setEngine, get
   }
   function close(force = false) {
     if (!force && input.value.trim()) return;
+    hidePlaceholder();
     root.classList.remove('open', 'menu-open', 'has-results');
     if (force) input.value = '';
     matches = [];

@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>New Tab</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/icon32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/icon16.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -159,14 +161,31 @@
         <div class="s-seg as-chips" id="popSets"></div>
       </div>
       <div class="pop-grid" id="popGrid"></div>
-      <button type="button" class="as-custom" id="customApp">
-        <span class="as-custom-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span>
-        <span><strong>Add any website</strong><small>Paste a link and the icon is found for you</small></span>
-      </button>
+      <form class="as-own" id="asAdd" autocomplete="off">
+        <div class="as-own-head">Add a link</div>
+        <div class="as-own-row">
+          <button type="button" class="as-own-icon" id="asAddIcon" title="Add an image" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="9" cy="9.5" r="1.5" fill="currentColor"/><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" d="M4.5 16l4.2-3.6 2.8 2.2L15.5 11l4 4.2"/></svg>
+          </button>
+          <input id="asUrl" type="text" inputmode="url" placeholder="Add Website Link Here" aria-label="Add Website Link Here">
+          <input id="asName" type="text" maxlength="28" placeholder="Name" aria-label="Name">
+          <button type="submit" class="btn sm primary" id="asAddBtn" disabled>Add</button>
+        </div>
+        <p class="as-own-note" id="asAddNote"></p>
+        <input id="asIconFile" type="file" accept="image/*" hidden>
+        <div class="menu as-icon-menu" id="asIconMenu" role="menu" hidden>
+          <button type="button" role="menuitem" id="asIconFileBtn">Choose from files</button>
+          <button type="button" role="menuitem" id="asIconLink">Use a link</button>
+          <div class="as-icon-url" id="asIconUrlRow" hidden>
+            <input id="asIconUrl" type="text" inputmode="url" placeholder="Image link" aria-label="Image link">
+            <button type="button" id="asIconUrlBtn">Use</button>
+          </div>
+        </div>
+      </form>
     </div>
     <div class="as-pane" data-pane="widgets" hidden>
-      <div class="as-title">Widgets</div>
-      <p class="as-sub">Drag a widget by its top bar to move it. Drop it near the left or right edge to snap it into a stack there.</p>
+      <div class="as-title">Add a widget</div>
+      <p class="as-sub">Drag a widget by its top bar to move it, and right-click it for its settings.</p>
       <div class="widget-cards" id="widgetCards"></div>
     </div>
   </dialog>

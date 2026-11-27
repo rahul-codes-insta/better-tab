@@ -20,6 +20,7 @@ const ICON_TTL = 1000 * 60 * 60 * 24 * 30; // re-check cached icons monthly
 const DEFAULT_SETTINGS = {
   brandfetchId: '',
   clock24: false,
+  clockMini: false,    // small clock in the top bar instead of the big one
   night: false,
   barStyle: 'bar',     // 'bar' | 'drawer'
   barCount: 8,         // icons visible in the app bar
@@ -29,7 +30,6 @@ const DEFAULT_SETTINGS = {
   searchOn: true,          // search bar above the bar / Keep watching
   searchEngine: 'google',  // last service used in the search bar
   continueWatching: true, // Keep watching: Prime Video
-  watchYoutube: true,      // Keep watching: YouTube
   watchNetflix: true,      // Keep watching: Netflix
   watchHotstar: true,      // Keep watching: JioHotstar
   modesOn: true,           // false = one mode: no Chill/Work switcher
@@ -47,13 +47,27 @@ const DEFAULT_SETTINGS = {
 // adapter (js/watch-<id>.js) plus an entry here.
 const WATCH_SERVICES = [
   { id: 'prime', name: 'Prime Video', setting: 'continueWatching', color: '#1399ff', match: /primevideo\.com|amazon\.[a-z.]+\/(gp\/video|prime)/i },
-  { id: 'youtube', name: 'YouTube', setting: 'watchYoutube', color: '#ff0033', match: /(^|\.)youtube\.com/i },
   { id: 'netflix', name: 'Netflix', setting: 'watchNetflix', color: '#e50914', match: /netflix\.com/i },
   { id: 'hotstar', name: 'JioHotstar', setting: 'watchHotstar', color: '#1f6fe5', match: /hotstar\.com/i },
 ];
 const watchKey = (id) => 'watch:' + id;
 
 const TYPE_KEYS = ['clockScale', 'clockWeight', 'dateScale', 'dateWeight', 'barScale'];
+
+// The clock always belongs to the mode, even without separate setups.
+// Kept on profile.clock (plus its position as `top`) and copied into settings for the active mode.
+const CLOCK_KEYS = ['clock24', 'clockMini', 'clockScale', 'clockWeight', 'dateScale', 'dateWeight'];
+const activeOf = (st) => st.profiles.find((p) => p.id === st.activeProfile);
+function stashClock(st = state) {
+  const p = st?.profiles && activeOf(st);
+  if (!p) return;
+  p.clock = { ...p.clock };
+  for (const k of CLOCK_KEYS) p.clock[k] = st.settings[k];
+}
+function loadClock(st = state) {
+  const c = activeOf(st)?.clock;
+  if (c) for (const k of CLOCK_KEYS) if (k in c) st.settings[k] = c[k];
+}
 
 // Settings that always stay the same in both modes, even with separate setups.
 const SHARED_KEYS = ['searchEngine', 'searchApps', 'searchNewTab', 'searchRemember', 'searchAnywhere', 'searchHints', 'modesOn', 'splitModes', 'showAdvanced', 'openSections', 'brandfetchId', 'weatherLoc', 'builtinClockTop'];
@@ -76,6 +90,7 @@ function normalize(st) {
     swapSettings(st, st.settingsMode, st.activeProfile);
   }
   if (st.settings.splitModes) st.settingsMode = st.activeProfile;
+  loadClock(st);
   return st;
 }
 
@@ -115,6 +130,7 @@ function applyTypeStyle() {
   root.setProperty('--date-scale', st.dateScale / 100);
   root.setProperty('--date-weight', st.dateWeight);
   root.setProperty('--bar-scale', st.barScale / 100);
+  document.body.classList.toggle('clock-mini', !!st.clockMini);
   if (typeof updateArrows === 'function') requestAnimationFrame(updateArrows);
 }
 
@@ -188,6 +204,7 @@ const findApp = (id) => profile().apps.find((a) => a.id === id);
 let saveTimer = null;
 let selfWrite = false;
 function save() {
+  stashClock();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     selfWrite = true;
@@ -261,6 +278,7 @@ function renderProfiles() {
 }
 
 let switching = false;
+let switchTurn = 0;
 let booted = false;   // no entrance animations on first paint
 
 /** Animate the bar from its old width to its new natural width (FLIP). */
@@ -284,19 +302,29 @@ async function switchMode(id) {
   switching = true;
   setDrawer(false);
   const prev = state.activeProfile;
+  stashClock();
   state.activeProfile = id;
   if (state.settings.splitModes) swapSettings(state, prev, id);
+  loadClock();
   document.body.dataset.mode = id;
   for (const b of $('#profiles').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === id));
   moveThumb(true);
   save();
-  applyWallpaper();                 // each mode has its own wallpaper (cross-fades)
-  // Fade the apps out, swap them, fade back in, while the bar glides to its new width.
+  // Order: everything fades out, the new wallpaper starts blending in, then the apps
+  // and widgets come back, and the clock (in the new mode's style) follows.
+  const turn = ++switchTurn;
+  document.body.classList.add('clock-out');
   const fromW = dock.getBoundingClientRect().width;
   dockStack.classList.add('mode-out');
   widgetLayer.classList.add('mode-out');
-  await wait(200);
+  await wait(220);
+  lastMinute = '';
+  applyTypeStyle();
   if (state.settings.splitModes) applyAllSettings();
+  let shown;
+  const wallShown = new Promise((r) => { shown = r; });
+  applyWallpaper(shown).catch(() => {}).finally(shown);
+  await wallShown;
   widgets.reset();
   requestAnimationFrame(() => widgetLayer.classList.remove('mode-out'));
   await renderDock();
@@ -307,6 +335,8 @@ async function switchMode(id) {
   syncAdvanced();
   requestAnimationFrame(() => dockStack.classList.remove('mode-out'));
   switching = false;
+  await wait(250); // partway into the wallpaper blend
+  if (turn === switchTurn) document.body.classList.remove('clock-out');
 }
 
 function applyWidgetsShown() {
@@ -853,10 +883,10 @@ $('#appForm').addEventListener('submit', async (e) => {
 const POPULAR = {
   chill: [
     ['YouTube', 'https://www.youtube.com/'], ['Netflix', 'https://www.netflix.com/'], ['Prime Video', 'https://www.primevideo.com/'],
-    ['JioHotstar', 'https://www.hotstar.com/'], ['Spotify', 'https://open.spotify.com/'], ['YouTube Music', 'https://music.youtube.com/'],
-    ['Instagram', 'https://www.instagram.com/'], ['X', 'https://x.com/'], ['Reddit', 'https://www.reddit.com/'],
-    ['Twitch', 'https://www.twitch.tv/'], ['SonyLIV', 'https://www.sonyliv.com/'], ['Crunchyroll', 'https://www.crunchyroll.com/'],
-    ['Apple TV', 'https://tv.apple.com/'], ['Pinterest', 'https://www.pinterest.com/'], ['WhatsApp', 'https://web.whatsapp.com/'],
+    ['Spotify', 'https://open.spotify.com/'], ['Instagram', 'https://www.instagram.com/'], ['WhatsApp', 'https://web.whatsapp.com/'],
+    ['YouTube Music', 'https://music.youtube.com/'], ['X', 'https://x.com/'], ['Reddit', 'https://www.reddit.com/'],
+    ['Twitch', 'https://www.twitch.tv/'], ['Disney+', 'https://www.disneyplus.com/'], ['JioHotstar', 'https://www.hotstar.com/'],
+    ['Crunchyroll', 'https://www.crunchyroll.com/'], ['Apple TV', 'https://tv.apple.com/'], ['Pinterest', 'https://www.pinterest.com/'],
   ],
   work: [
     ['Gmail', 'https://mail.google.com/'], ['Calendar', 'https://calendar.google.com/'], ['Drive', 'https://drive.google.com/'],
@@ -887,9 +917,180 @@ function showAddTab(tab) {
 addSheet.querySelectorAll('#addTabs button').forEach((b) => b.addEventListener('click', () => showAddTab(b.dataset.tab)));
 $('#addClose').addEventListener('click', () => addSheet.close());
 addSheet.addEventListener('click', (e) => { if (e.target === addSheet) addSheet.close(); }); // click on the backdrop
-$('#customApp').addEventListener('click', () => { addSheet.close(); openEditor(); });
+addSheet.addEventListener('close', () => { quick.seq++; resetQuick(); });
 
-function renderPopular() {
+/* ---------- popular-pick icons: found like bar icons, cached briefly ---------- */
+// Kept for two weeks then dropped; an icon moves to the app itself once it's added.
+const POP_KEY = 'popicons';
+const POP_TTL = 1000 * 60 * 60 * 24 * 14;
+let popIcons = null;
+let popSaveTimer;
+const popQueue = [];
+let popRunning = 0;
+async function loadPopIcons() {
+  if (popIcons) return popIcons;
+  const all = (await store.get(POP_KEY))[POP_KEY] || {};
+  popIcons = {};
+  for (const [host, v] of Object.entries(all)) if (Date.now() - v.at < POP_TTL) popIcons[host] = v;
+  if (Object.keys(popIcons).length !== Object.keys(all).length) savePopIcons();
+  return popIcons;
+}
+function savePopIcons() {
+  clearTimeout(popSaveTimer);
+  popSaveTimer = setTimeout(() => store.set({ [POP_KEY]: popIcons }), 400);
+}
+const popSrc = (icon) => (icon.kind === 'remote' ? icon.url : icon.dataUrl);
+// A saved pick is reusable once it has a plain icon (nothing drawn behind it).
+const popFresh = (v) => v && Date.now() - v.at < POP_TTL && (v.icon?.kind === 'remote' || !!v.bare);
+const popPending = new Set();
+function queuePopIcon(name, url, host) {
+  if (popPending.has(host)) return;
+  popPending.add(host);
+  popQueue.push([name, url, host]);
+  pumpPop();
+}
+function pumpPop() {
+  while (popRunning < 3 && popQueue.length) {
+    const [name, url, host] = popQueue.shift();
+    if (popFresh(popIcons[host])) { popPending.delete(host); continue; }
+    popRunning++;
+    resolveIcon(url, { brandfetchId: state.settings.brandfetchId, name, withBare: true })
+      .then((res) => {
+        if (res.source === 'letter') return;
+        const { bare, ...icon } = res;
+        popIcons[host] = { at: Date.now(), icon, bare: bare || '' };
+        savePopIcons();
+        const img = $('#popGrid').querySelector(`[data-host="${host}"] img`);
+        if (img) { img.src = bare || popSrc(icon); img.parentElement.classList.add('full'); }
+      })
+      .catch(() => {})
+      .finally(() => { popRunning--; popPending.delete(host); pumpPop(); });
+  }
+}
+
+/* ---------- add a link, right in the sheet ---------- */
+const quick = { seq: 0, url: '', icon: null, custom: false, busy: false, nameTouched: false };
+const qUrl = $('#asUrl'), qName = $('#asName'), qBtn = $('#asAddBtn'), qIcon = $('#asAddIcon'), qNote = $('#asAddNote');
+const ICON_SVG = qIcon.innerHTML;
+function drawQuick(note) {
+  qIcon.innerHTML = quick.busy && !quick.custom ? '<span class="spinner"></span>' : quick.icon ? '' : ICON_SVG;
+  if (quick.icon && !(quick.busy && !quick.custom)) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.referrerPolicy = 'strict-origin-when-cross-origin';
+    img.src = popSrc(quick.icon);
+    qIcon.append(img);
+  }
+  qIcon.classList.toggle('full', !!quick.icon);
+  qBtn.disabled = quick.busy || !qUrl.value.trim();
+  const text = note || (quick.busy && !quick.custom ? 'Finding an icon…' : '');
+  qNote.textContent = text;
+  qNote.classList.toggle('error', !!note);
+}
+function resetQuick() {
+  Object.assign(quick, { url: '', icon: null, custom: false, busy: false, nameTouched: false });
+  qUrl.value = qName.value = '';
+  $('#asIconUrl').value = '';
+  closeIconMenu();
+  drawQuick();
+}
+async function withQuick(fn) {
+  const seq = ++quick.seq;
+  quick.busy = true;
+  drawQuick();
+  let err = '';
+  try {
+    const icon = await fn();
+    if (seq === quick.seq) { quick.icon = icon; quick.custom = true; }
+  } catch (e) {
+    err = e.message || 'That image could not be loaded';
+  } finally {
+    if (seq === quick.seq) { quick.busy = false; drawQuick(err); }
+  }
+}
+async function quickLookup() {
+  let url;
+  try { url = normalizeUrl(qUrl.value); } catch (e) { if (qUrl.value.trim()) drawQuick(e.message); return; }
+  if (url === quick.url && (quick.icon || quick.busy)) return;
+  const seq = ++quick.seq;
+  quick.url = url;
+  quick.busy = !quick.custom;
+  if (!quick.custom) quick.icon = null;
+  if (!quick.nameTouched) qName.value = prettyName(url);
+  drawQuick();
+  const page = await scanPage(url);
+  if (seq !== quick.seq) return;
+  if (!quick.nameTouched && page.name) qName.value = page.name.slice(0, 28);
+  const icon = quick.custom ? null : await resolveIcon(url, { brandfetchId: state.settings.brandfetchId, page, name: qName.value });
+  if (seq !== quick.seq) return;
+  if (!quick.custom && icon) quick.icon = icon;
+  quick.busy = false;
+  drawQuick();
+}
+let quickTimer;
+qUrl.addEventListener('input', () => {
+  qBtn.disabled = quick.busy || !qUrl.value.trim();
+  clearTimeout(quickTimer);
+  quickTimer = setTimeout(quickLookup, 650);
+});
+qUrl.addEventListener('paste', () => { clearTimeout(quickTimer); setTimeout(quickLookup, 0); });
+qUrl.addEventListener('blur', () => { clearTimeout(quickTimer); quickLookup(); });
+qName.addEventListener('input', () => { quick.nameTouched = true; });
+const iconMenu = $('#asIconMenu');
+function closeIconMenu() {
+  iconMenu.hidden = true;
+  $('#asIconUrlRow').hidden = true;
+  qIcon.setAttribute('aria-expanded', 'false');
+}
+function openIconMenu() {
+  iconMenu.hidden = false;
+  qIcon.setAttribute('aria-expanded', 'true');
+  // The sheet clips anything past its edge, and the button sits at the bottom, so the menu opens upward.
+  const d = addSheet.getBoundingClientRect();
+  const b = qIcon.getBoundingClientRect();
+  const mw = iconMenu.offsetWidth, mh = iconMenu.offsetHeight;
+  iconMenu.style.left = Math.max(8, Math.min(b.left - d.left, d.width - mw - 8)) + 'px';
+  const above = b.top - d.top - 6 - mh;
+  iconMenu.style.top = (above >= 8 ? above : b.bottom - d.top + 6) + 'px';
+}
+qIcon.addEventListener('click', () => (iconMenu.hidden ? openIconMenu() : closeIconMenu()));
+document.addEventListener('pointerdown', (e) => {
+  if (!iconMenu.hidden && !iconMenu.contains(e.target) && !qIcon.contains(e.target)) closeIconMenu();
+});
+addSheet.addEventListener('cancel', (e) => { if (!iconMenu.hidden) { e.preventDefault(); closeIconMenu(); } });
+$('#asIconFileBtn').addEventListener('click', () => { closeIconMenu(); $('#asIconFile').click(); });
+$('#asIconFile').addEventListener('change', () => {
+  const file = $('#asIconFile').files[0];
+  $('#asIconFile').value = '';
+  if (file) withQuick(() => iconFromFile(file));
+});
+$('#asIconLink').addEventListener('click', () => {
+  $('#asIconUrlRow').hidden = false;
+  openIconMenu();
+  $('#asIconUrl').focus();
+});
+$('#asIconUrlBtn').addEventListener('click', () => {
+  closeIconMenu();
+  withQuick(() => iconFromImageUrl($('#asIconUrl').value));
+});
+$('#asIconUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#asIconUrlBtn').click(); } });
+$('#asAdd').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  let url;
+  try { url = normalizeUrl(qUrl.value); } catch (err) { drawQuick(err.message); return; }
+  if (quick.busy) return;
+  const app = { id: uid(), name: (qName.value.trim() || prettyName(url)).slice(0, 28), url, icon: null };
+  if (quick.icon && (quick.custom || quick.url === url)) await applyIcon(app, quick.icon);
+  profile().apps.push(app);
+  save();
+  resetQuick();
+  drawQuick(`${app.name} added`);
+  qNote.classList.remove('error');
+  renderPopular();
+  await renderDock();
+});
+
+async function renderPopular() {
   const sets = $('#popSets');
   sets.innerHTML = '';
   for (const [id, label] of [['chill', 'Chill picks'], ['work', 'Work picks']]) {
@@ -901,25 +1102,37 @@ function renderPopular() {
     sets.append(b);
   }
   $('#popTitle').textContent = modesOn() ? `Popular apps · adding to ${profile().name}` : 'Popular apps';
-  const have = new Set(profile().apps.map((a) => hostOf(a.url)));
+  const have = new Map(profile().apps.map((a) => [hostOf(a.url), a]));
+  const cache = await loadPopIcons();
   const grid = $('#popGrid');
   grid.innerHTML = '';
   for (const [name, url] of POPULAR[popSet]) {
     const host = hostOf(url);
+    const mine = have.get(host);
+    const saved = cache[host];
+    const hit = saved?.bare ? { kind: 'data', dataUrl: saved.bare }
+      : mine?.icon ? { kind: 'remote', url: iconSrc(mine) } : saved?.icon;
     const b = document.createElement('button');
     b.type = 'button';
+    b.dataset.host = host;
     b.className = 'pop-item' + (have.has(host) ? ' added' : '');
     b.title = have.has(host) ? `${name} is already in your bar` : `Add ${name}`;
-    b.innerHTML = `<span class="pop-icon"><img alt="" src="https://www.google.com/s2/favicons?domain=${host}&sz=64"></span><span class="pop-name"></span><span class="pop-tick" aria-hidden="true"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>`;
+    b.innerHTML = `<span class="pop-icon${hit ? ' full' : ''}"><img alt=""></span><span class="pop-name"></span><span class="pop-tick" aria-hidden="true"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>`;
     b.querySelector('.pop-name').textContent = name;
-    b.querySelector('img').onerror = (e) => { e.target.replaceWith(Object.assign(document.createElement('span'), { textContent: name[0], className: 'pop-letter' })); };
+    const img = b.querySelector('img');
+    img.referrerPolicy = 'strict-origin-when-cross-origin';
+    img.src = hit ? popSrc(hit) : `https://www.google.com/s2/favicons?domain=${host}&sz=64`;
+    img.onerror = () => { img.onerror = null; img.parentElement.classList.add('full'); img.src = letterTile(name); };
+    if (!popFresh(saved)) queuePopIcon(name, url, host);
     b.addEventListener('click', async () => {
       if (b.classList.contains('added')) return;
       const app = { id: uid(), name, url, icon: null };
+      const cached = popIcons[host]?.icon;
+      if (cached) await applyIcon(app, cached);
       profile().apps.push(app);
       b.classList.add('added');
       save();
-      await renderDock();          // the icon is looked up in the background
+      await renderDock();          // without a cached icon it's looked up in the background
     });
     grid.append(b);
   }
@@ -929,18 +1142,13 @@ function renderWidgetCards() {
   const box = $('#widgetCards');
   box.innerHTML = '';
   for (const [type, t] of Object.entries(WIDGET_TYPES)) {
-    const card = document.createElement('div');
+    const card = document.createElement('button');
+    card.type = 'button';
     card.className = 'widget-card';
-    card.innerHTML = `<div class="wc-preview">
-        <div class="pv-row done"><span class="pv-dot"></span>Book movie tickets</div>
-        <div class="pv-row"><span class="pv-dot"></span>Finish the weekly report</div>
-        <div class="pv-row"><span class="pv-dot"></span>Call mom</div>
-      </div>
-      <h4>${t.icon}<span></span></h4><p></p>
-      <button type="button" class="btn sm primary">Add widget</button>`;
-    card.querySelector('h4 span').textContent = t.name;
-    card.querySelector('p').textContent = t.description;
-    card.querySelector('.btn').addEventListener('click', () => {
+    card.innerHTML = '<span class="wc-name"></span><span class="wc-desc"></span>';
+    card.querySelector('.wc-name').textContent = t.name;
+    card.querySelector('.wc-desc').textContent = t.description;
+    card.addEventListener('click', () => {
       addSheet.close();
       if (state.settings.widgetsShown === false) { state.settings.widgetsShown = true; applyWidgetsShown(); }
       widgets.add(type);
@@ -955,6 +1163,7 @@ $('#addBtn').addEventListener('click', () => openAddSheet());
 
 const sdlg = $('#settingsDialog');
 const ICON = {
+  widgets: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/></svg>',
   wallpaper: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18l6-8 4 5 2.5-3L21 18z"/><circle cx="16.5" cy="7" r="1.6"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l4.5 4.5"/></svg>',
   bar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3" y="14" width="18" height="6" rx="2.5"/><rect x="5" y="4" width="5" height="5" rx="1.5"/><rect x="14" y="4" width="5" height="5" rx="1.5"/></svg>',
@@ -991,7 +1200,12 @@ const SETTINGS = [
         },
         refresh: () => renderEngineRow(),
       },
-      { type: 'slider', label: 'Clock position', min: 2, max: 40, step: 0.5, format: pct, get: currentClockTop, set: setClockTop },
+      {
+        type: 'toggle', key: 'clockMini', label: 'Small clock at the top',
+        hint: 'Sits in the top bar, in line with the mode switch',
+        onChange: () => applyTypeStyle(),
+      },
+      { type: 'slider', label: 'Clock position', min: 2, max: 40, step: 0.5, format: pct, get: currentClockTop, set: setClockTop, when: () => !state.settings.clockMini },
       { type: 'toggle', key: 'clock24', label: '24-hour clock', onChange: () => { lastMinute = ''; } },
       {
         type: 'group',
@@ -1105,6 +1319,19 @@ const SETTINGS = [
     ],
   },
   {
+    id: 'widgets',
+    title: 'Widgets',
+    icon: ICON.widgets,
+    summary: () => (state.settings.widgetsFree ? 'Move freely' : 'Snap to grid'),
+    items: [
+      {
+        type: 'toggle', key: 'widgetsFree', label: 'Move widgets freely',
+        hint: () => (state.settings.widgetsFree ? 'Widgets stay exactly where you drop them' : 'Widgets snap to an invisible grid that shows while you move them'),
+        onChange: () => widgets.render(),
+      },
+    ],
+  },
+  {
     id: 'watching',
     title: 'Keep watching',
     icon: ICON.watch,
@@ -1116,7 +1343,6 @@ const SETTINGS = [
       type: 'toggle', key: svc.setting, label: svc.name,
       hint: {
         prime: 'Your last show with time left',
-        youtube: 'Resumes at the exact second · skips ads and videos under 4 minutes',
         netflix: 'Artwork appears once you’ve browsed Netflix in this browser',
         hotstar: 'Best effort: JioHotstar’s pages change often',
       }[svc.id],
@@ -1162,7 +1388,7 @@ const SETTINGS = [
       },
       {
         type: 'toggle', label: 'Separate setups', when: modesOn,
-        hint: 'Each mode keeps its own app bar, clock style, weather and night mode. Wallpapers are always separate.',
+        hint: 'Each mode keeps its own app bar, weather and night mode. Wallpapers and the clock are always separate.',
         get: () => !!state.settings.splitModes,
         set: (v) => { setSplitModes(v); syncAdvanced(); },
       },
@@ -1190,17 +1416,14 @@ let settingsUI = { refresh() {} };
 
 function setClockTop(v) {
   applyClockTop(v);
-  // Saved on the wallpaper itself, so the engine and Settings share one value.
-  clearTimeout(setClockTop.t);
-  setClockTop.t = setTimeout(async () => {
-    if (currentWallRec) { currentWallRec.clockTop = v; await putWallpaper(currentWallRec); }
-    else { state.settings.builtinClockTop = v; save(); }
-  }, 250);
+  const p = profile();
+  p.clock = { ...p.clock, top: v };
+  save();
 }
 
 async function exportBackup() {
   const all = await store.getAll();
-  for (const k of Object.keys(all)) if (k.startsWith('pinterest:')) delete all[k]; // sign-in and cached pins stay on this computer
+  for (const k of Object.keys(all)) if (k.startsWith('pinterest:') || k === POP_KEY) delete all[k]; // sign-in and caches stay on this computer
   const blob = new Blob([JSON.stringify({ horizonNewTab: 1, ...all }, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1314,7 +1537,10 @@ const BUILTIN = { bg: 'assets/wallpaper.jpg', fg: 'assets/wallpaper-fg.webp' };
 const DEFAULT_CLOCK_TOP = 14; // vh
 let currentWallRec = null;    // the saved record of the wallpaper on screen (null = built-in)
 
+// The mode's own position, else the one saved with its wallpaper.
 function currentClockTop() {
+  const own = profile().clock?.top;
+  if (own != null) return own;
   if (currentWallRec) return currentWallRec.clockTop ?? DEFAULT_CLOCK_TOP;
   return state.settings.builtinClockTop ?? DEFAULT_CLOCK_TOP;
 }
@@ -1330,7 +1556,8 @@ const loadImg = (el, src) => new Promise((resolve) => {
   el.src = src;
 });
 
-async function applyWallpaper() {
+// onShow runs as soon as the new picture starts showing; the promise settles once the blend is done.
+async function applyWallpaper(onShow) {
   let id = profile().wallpaper || 'builtin';
   let pick = BUILTIN, urls = [];
   let rec = null;
@@ -1347,10 +1574,18 @@ async function applyWallpaper() {
     } catch { id = 'builtin'; }
   }
   currentWallRec = rec;
-  if (id === shownWall) { urls.forEach(URL.revokeObjectURL); applyClockTop(); return; }
+  if (id === shownWall) { urls.forEach(URL.revokeObjectURL); applyClockTop(); onShow?.(); return; }
   const first = shownWall === null;
   shownWall = id;
-  if (!first) { wallBg.classList.remove('ready'); wallFg.classList.remove('ready'); await wait(350); }
+  // A copy of the old picture stays on top while the new one loads underneath, then fades away.
+  const ghosts = first ? [] : [wallBg, wallFg].filter((el) => !el.classList.contains('none')).map((el) => {
+    const g = el.cloneNode();
+    g.removeAttribute('id');
+    el.after(g);
+    return g;
+  });
+  await Promise.all(ghosts.map((g) => g.decode().catch(() => {})));
+  wallFg.classList.remove('ready');
   await Promise.all([
     loadImg(wallBg, pick.bg),
     pick.fg ? loadImg(wallFg, pick.fg) : Promise.resolve(),
@@ -1358,7 +1593,13 @@ async function applyWallpaper() {
   wallFg.classList.toggle('none', !pick.fg);
   applyClockTop();
   if (sdlg.open) settingsUI.refresh();
-  wallBg.classList.add('ready'); wallFg.classList.add('ready');
+  onShow?.();
+  requestAnimationFrame(() => {
+    wallBg.classList.add('ready'); wallFg.classList.add('ready');
+    ghosts.forEach((g) => g.classList.remove('ready'));
+  });
+  await wait(first ? 0 : 950);
+  ghosts.forEach((g) => g.remove());
   wallUrls.forEach(URL.revokeObjectURL);
   wallUrls = urls;
 }
@@ -1398,7 +1639,9 @@ async function renderWallGrid() {
       b.append(x);
     }
     b.addEventListener('click', () => {
-      profile().wallpaper = it.id;
+      const p = profile();
+      if (p.wallpaper !== it.id && p.clock) delete p.clock.top; // a new wallpaper brings its own clock spot
+      p.wallpaper = it.id;
       save(); applyWallpaper();
       grid.querySelectorAll('.wall-item').forEach((el) => el.setAttribute('aria-checked', String(el === b)));
     });
@@ -1735,6 +1978,7 @@ const widgetLayer = $('#widgetLayer');
 function updateWidgetBounds() {
   const top = dockStack.getBoundingClientRect().top;
   widgetLayer.style.setProperty('--w-bottom', Math.max(120, innerHeight - top + 14) + 'px');
+  if (state) widgets.render(); // the grid ends just above the bar
 }
 addEventListener('resize', updateWidgetBounds);
 new ResizeObserver(updateWidgetBounds).observe(dockStack);
@@ -1745,11 +1989,14 @@ const widgets = createWidgetLayer({
   getSettings: () => state.settings,
   apps: { all: () => profile().apps, onBar: barApps, icon: iconSrc, changed: () => renderDock() },
   // Imaginary rounded rectangle: under the mode switcher, above the Keep watching cards and bar.
+  // Left and right edges line up with the mode switcher and the night button.
   getBounds: () => {
     const topEl = $('#profiles').hidden ? $('#nightBtn') : $('#profiles');
+    const right = $('#nightBtn').getBoundingClientRect().right || innerWidth - 16;
+    const left = $('#profiles').hidden ? innerWidth - right : $('#profiles').getBoundingClientRect().left;
     return {
-      left: 16,
-      right: innerWidth - 16,
+      left,
+      right,
       top: topEl.getBoundingClientRect().bottom + 14,
       bottom: dockStack.getBoundingClientRect().top - 14,
     };
@@ -1759,6 +2006,7 @@ const widgets = createWidgetLayer({
 /* ============================ boot ============================ */
 
 async function boot() {
+  store.remove('watch:youtube'); // Keep watching no longer supports YouTube
   const got = await store.get('state');
   state = normalize(got.state?.profiles ? got.state : freshState());
   if (state !== got.state) await store.set({ state });
