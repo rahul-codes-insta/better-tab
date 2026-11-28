@@ -2,9 +2,9 @@
 // so the last title seen for each /watch/<id> is remembered. Artwork comes from the
 // box-art images on Netflix's browse pages, matched by title.
 (() => {
-  const W = window.HorizonWatch;
-  if (!W || window.__horizonNetflix) return;
-  window.__horizonNetflix = true;
+  const W = window.BetterTabWatch;
+  if (!W || window.__betterTabNetflix) return;
+  window.__betterTabNetflix = true;
 
   const ART_KEY = 'watch:netflix-art';
   const watchId = () => (location.pathname.match(/^\/watch\/(\d+)/) || [])[1] || null;

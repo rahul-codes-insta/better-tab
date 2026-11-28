@@ -33,8 +33,8 @@ if (OVERLAY) {
   document.body.classList.add('overlay');
   const close = $('#closeBtn');
   close.textContent = 'Close';
-  close.addEventListener('click', (e) => { e.preventDefault(); tellParent('horizon-engine-close'); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#busy').hidden) tellParent('horizon-engine-close'); });
+  close.addEventListener('click', (e) => { e.preventDefault(); tellParent('bettertab-engine-close'); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#busy').hidden) tellParent('bettertab-engine-close'); });
 }
 
 const ratio = (screen.width && screen.height) ? screen.width / screen.height : 16 / 10;
@@ -503,7 +503,7 @@ $('#saveBtn').addEventListener('click', async () => {
       await store.set({ state });
     }
     $('#savedMsg').hidden = false;
-    tellParent('horizon-engine-saved');
+    tellParent('bettertab-engine-saved');
   } catch (e) {
     console.error(e);
     $('#saveError').textContent = 'Couldn’t save this wallpaper. Try again.';

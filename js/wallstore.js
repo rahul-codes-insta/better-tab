@@ -3,7 +3,7 @@
 
 /* ---------------- wallpapers ---------------- */
 
-const DB_NAME = 'horizon';
+const DB_NAME = 'bettertab';
 const DB_VERSION = 1;
 const STORE = 'wallpapers';
 
@@ -48,8 +48,8 @@ export async function listWallpapers() {
 // "model_quantized" is the variant Transformers.js uses by default in browsers.
 export const MODEL_URL = 'https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_quantized.onnx';
 export const MODEL_SIZE_MB = 27;
-const CACHE = 'horizon-engine-v2';
-const OLD_CACHES = ['horizon-engine-v1'];
+const CACHE = 'bettertab-engine-v2';
+const OLD_CACHES = [];
 
 export async function engineInstalled() {
   try {

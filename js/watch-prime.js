@@ -7,8 +7,8 @@
 // copy of the current title's page (fetched once per title) and only used when its
 // title matches what's playing.
 (() => {
-  if (window.__horizonPrime) return;
-  window.__horizonPrime = true;
+  if (window.__betterTabPrime) return;
+  window.__betterTabPrime = true;
 
   const KEY = 'watch:prime';
   const MIN_LENGTH = 5 * 60;      // ignore trailers and ads (< 5 min)

@@ -224,7 +224,7 @@ export function createSearch({ root, getApps, iconFor, getEngine, setEngine, get
   // Start typing anywhere on the page to search.
   document.addEventListener('keydown', (e) => {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (document.querySelector('dialog[open]') || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    if (document.querySelector('dialog[open], .notes-overlay:not([hidden])') || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
     if (e.key === '/' || (getOptions().anywhere !== false && e.key.length === 1 && /\S/.test(e.key))) {
       if (e.key === '/') e.preventDefault();
       input.focus();

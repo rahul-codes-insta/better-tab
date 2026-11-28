@@ -4,8 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>New Tab</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/icon32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="assets/icon16.png">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -45,10 +44,14 @@
    <div class="dock-stack" id="dockStack">
     <!-- Search: apps + the web -->
     <div class="search" id="search"></div>
-    <!-- Keep watching (Prime Video), aligned to the bar's left edge -->
+    <!-- Keep watching: exactly as wide as the app bar; extra cards scroll sideways -->
     <section class="continue" id="continue" hidden aria-label="Keep watching">
       <div class="continue-label">Keep watching</div>
-      <div class="continue-row" id="continueRow"></div>
+      <div class="continue-scroll" id="continueScroll">
+        <button class="cw-arrow left" type="button" aria-label="Scroll left" tabindex="-1"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M15 6l-6 6 6 6"/></svg></button>
+        <div class="continue-row" id="continueRow"></div>
+        <button class="cw-arrow right" type="button" aria-label="Scroll right" tabindex="-1"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg></button>
+      </div>
     </section>
     <div class="dock" id="dock">
       <!-- Drawer: expands upward out of the bar (drawer mode only) -->

@@ -3,7 +3,8 @@
 // To add a widget type, add an entry to WIDGET_TYPES:
 //   name, description, icon (svg), create() → initial data, mount(body, widget, api),
 //   optional size: one of WIDGET_SIZES (otherwise 2×4),
-//   optional sizes: the sizes it makes sense in, e.g. ['2x2', '2x4'] (otherwise all four),
+//   optional sizes: the sizes it makes sense in, e.g. ['2x2', '4x2'] (otherwise all but the tall 2×4),
+//   Sizes read columns × rows: 4x2 is 4 across and 2 down (wide), 2x4 is 2 across and 4 down (tall).
 //   optional settings(widget) → extra rows for the widget's gear menu, each one of
 //     { label, get(), set(v) }                 a toggle
 //     { label, text: true, get(), set(v) }     a text field
@@ -18,23 +19,32 @@ import { uiConfirm } from './ui-dialog.js';
 import * as P from './pinterest.js';
 import { extraWidgets } from './widgets-more.js';
 
-export const WIDGET_SIZES = [['2x2', '2×2'], ['2x4', '2×4'], ['4x4', '4×4'], ['6x4', '6×4']];
-const LEGACY_SIZE = { s: '2x2', m: '2x4', l: '4x4', xl: '6x4' };
-const CELLS = { '2x2': [2, 2], '2x4': [4, 2], '4x4': [4, 4], '6x4': [6, 4] }; // [across, down]
+// Widgets have no name heading unless their type asks for one (showName: true, e.g. To-do).
+// A type with its own switch (ownName, e.g. App folder) lets each widget choose.
+const nameShown = (w) => {
+  const t = WIDGET_TYPES[w.type];
+  return t?.ownName ? !!w.showName : !!t?.showName;
+};
+
+export const WIDGET_SIZES = [['2x2', '2×2'], ['2x4', '2×4'], ['4x2', '4×2'], ['4x4', '4×4']];
+const LEGACY_SIZE = { s: '2x2', m: '4x2', l: '4x4', xl: '4x4', '6x4': '4x4' }; // 6×4 is gone: 4×4 is the largest
+const CELLS = { '2x2': [2, 2], '2x4': [2, 4], '4x2': [4, 2], '4x4': [4, 4], '6x4': [6, 4] }; // [across, down]
 // The sizes a widget type offers (optional `sizes` on its entry), in WIDGET_SIZES order.
-const sizesOf = (type) => WIDGET_SIZES.filter(([id]) => !WIDGET_TYPES[type]?.sizes || WIDGET_TYPES[type].sizes.includes(id));
+const sizesOf = (type) => WIDGET_SIZES.filter(([id]) => (WIDGET_TYPES[type]?.sizes ? WIDGET_TYPES[type].sizes.includes(id) : id !== '2x4'));
 function applySize(w) {
   if (LEGACY_SIZE[w.size]) w.size = LEGACY_SIZE[w.size];
+  // Before sizes read columns × rows, "2x4" meant the wide size; those become 4x2 once.
+  if (!w.sz) { if (w.size === '2x4') w.size = '4x2'; w.sz = 2; }
   if (!sizesOf(w.type).some(([id]) => id === w.size)) w.size = WIDGET_TYPES[w.type]?.size || sizesOf(w.type)[0][0];
   delete w.shape; // every widget is the soft shape now
   delete w.hideButtons; // settings live in the right-click menu
   return w.size;
 }
 
-// Themes: a widget's own look (optional `theme: { name }` on its type, styled with
+// Themes: a widget's own look, always called "Default" (optional `theme: {}` on its type, styled with
 // .widget.type-<id>.theme-own) and then Glass, Dark and Clear (`noClear: true` drops Clear).
 function themesOf(type) {
-  return [...(type.theme ? [['own', type.theme.name]] : []), ['glass', 'Glass'], ['dark', 'Dark'], ...(type.noClear ? [] : [['clear', 'Clear']])];
+  return [...(type.theme ? [['own', 'Default']] : []), ['glass', 'Glass'], ['dark', 'Dark'], ...(type.noClear ? [] : [['clear', 'Clear']])];
 }
 function lookOf(w) {
   const type = WIDGET_TYPES[w.type];
@@ -66,11 +76,12 @@ const MAX_CITIES = 4;
 export const WIDGET_TYPES = {
   /* ---------- to-do ---------- */
   todo: {
+    showName: true, // the one widget with a title
     name: 'To-do',
     description: 'A checklist. Add it again for another list.',
     icon: ICONS.todo,
-    sizes: ['2x2', '2x4', '4x4'],
-    theme: { name: 'White' },
+    sizes: ['2x2', '2x4', '4x2', '4x4'],
+    theme: {}, // its own look ("Default"): white
     create: () => ({ items: [], title: 'To-do' }),
     mount(body, w, api) {
       const d = w.data;
@@ -286,36 +297,54 @@ export const WIDGET_TYPES = {
   /* ---------- world clock ---------- */
   worldclock: {
     name: 'World clock',
-    description: 'Times for up to 4 cities.',
+    description: 'Times for up to 4 cities. One city gets a big clock with a day line.',
     icon: ICONS.clock,
-    create: () => ({ clocks: [{ tz: 'America/New_York' }, { tz: 'Europe/London' }] }),
+    hideName: true, // the cities say what it is
+    theme: {}, // its own look ("Default"): white card, dark type, a red "now" marker
+    sizes: ['2x2', '2x4', '4x2', '4x4'],
+    create: () => ({ clocks: [{ tz: 'America/New_York' }] }),
     mount(body, w, api) {
       const d = migrateClock(w.data);
-      body.innerHTML = '<ul class="wc-list"></ul><div class="wc-empty" hidden>No cities yet. <button type="button">Choose cities</button></div>';
-      const list = body.querySelector('.wc-list');
+      body.innerHTML = '<ul class="wcx-list"></ul><div class="wc-empty" hidden>No cities yet. <button type="button">Choose cities</button></div>';
+      const list = body.querySelector('.wcx-list');
       const empty = body.querySelector('.wc-empty');
       empty.querySelector('button').addEventListener('click', () => api.openSettings?.());
       const rows = () => [...(d.local ? [{ tz: HERE_TZ, label: 'My time', here: true }] : []), ...d.clocks];
+      const TICKS = '<div class="wcx-ticks" aria-hidden="true"><span>12</span><span>6</span><span>12</span><span>6</span><span>12</span></div>';
 
       function draw() {
         list.innerHTML = '';
-        list.classList.toggle('grid', d.layout === 'grid');
+        const n = rows().length;
+        // One city: the big clock with a day line. More: a stack of rows, each with its own day bar.
+        const solo = n === 1;
+        list.className = 'wcx-list' + (solo ? ' solo' : ' stack') + (!solo && d.layout === 'grid' ? ' grid' : '');
         for (const c of rows()) {
           const li = document.createElement('li');
-          li.className = 'wc-item' + (c.here ? ' here' : '');
+          li.className = 'wcx-item' + (c.here ? ' here' : '');
           li.dataset.tz = c.tz;
-          li.innerHTML = '<div class="wc-place"><span class="wc-city"></span><span class="wc-meta"></span></div><div class="wc-clock"><span class="wc-dn" aria-hidden="true"></span><span class="wc-time"></span><span class="wc-ampm"></span></div>';
-          li.querySelector('.wc-city').textContent = c.label || cityOf(c.tz);
+          li.innerHTML = '<div class="wcx-place"><span class="wcx-city"></span><span class="wcx-meta"></span></div>'
+            + '<div class="wcx-clock"><span class="wcx-time"></span><span class="wcx-ampm"></span></div>'
+            + `<div class="wcx-day"><div class="wcx-track"><i class="wcx-dot"></i></div>${solo ? TICKS : ''}</div>`
+            + (solo ? '<div class="wcx-now" aria-hidden="true"><i></i></div>' : '');
+          li.querySelector('.wcx-city').textContent = c.label || cityOf(c.tz);
           list.append(li);
         }
-        const n = rows().length || 1;
-        const across = w.size === '6x4' ? 4 : w.size === '2x2' ? 1 : 2;
-        list.style.setProperty('--cols', String(d.layout === 'grid' ? Math.min(across, n) : w.size === '2x4' || w.size === '6x4' ? Math.min(2, n) : 1));
-        list.hidden = !rows().length;
-        empty.hidden = !!rows().length;
+        const across = w.size === '2x2' || w.size === '2x4' ? 1 : 2;
+        const cols = !solo && d.layout === 'grid' ? Math.min(across, n) : 1;
+        list.style.setProperty('--cols', String(cols));
+        list.style.setProperty('--rows', String(Math.max(1, Math.ceil(n / cols)))); // text scales to fit the rows
+        list.hidden = !n;
+        empty.hidden = !!n;
         api.setCount('');
         tick();
       }
+
+      const gmt = (raw) => {
+        const min = Math.round(raw / 15) * 15; // offsets are whole quarter hours
+        if (!min) return 'GMT';
+        const h = Math.floor(Math.abs(min) / 60), m = Math.abs(min) % 60;
+        return `GMT${min > 0 ? '+' : '−'}${h}${m ? ':' + String(m).padStart(2, '0') : ''}`;
+      };
 
       function tick() {
         const now = new Date();
@@ -323,25 +352,23 @@ export const WIDGET_TYPES = {
         const here = offsetMin(now, HERE_TZ);
         for (const li of list.children) {
           const tz = li.dataset.tz;
-          const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', second: d.seconds ? '2-digit' : undefined, hour12: h12 }).formatToParts(now);
-          li.querySelector('.wc-time').textContent = parts.filter((p) => p.type !== 'dayPeriod').map((p) => p.value).join('').trim();
-          li.querySelector('.wc-ampm').textContent = (parts.find((p) => p.type === 'dayPeriod')?.value || '').toLowerCase();
-          const hour = +new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hourCycle: 'h23' }).format(now);
-          const day = hour >= 6 && hour < 18;
-          li.querySelector('.wc-dn').innerHTML = d.daynight !== false ? (day ? ICONS.sun : ICONS.moon) : '';
-          li.querySelector('.wc-dn').title = day ? 'Daytime' : 'Night';
+          const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: d.seconds ? '2-digit' : undefined, hour12: h12 }).formatToParts(now);
+          li.querySelector('.wcx-time').textContent = parts.filter((p) => p.type !== 'dayPeriod').map((p) => p.value).join('').trim();
+          li.querySelector('.wcx-ampm').textContent = parts.find((p) => p.type === 'dayPeriod')?.value || '';
+          const hm = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(now);
+          const hour = +hm.find((p) => p.type === 'hour').value, minute = +hm.find((p) => p.type === 'minute').value;
+          li.style.setProperty('--t', String((hour * 60 + minute) / 1440)); // where now sits on the day line
           li.classList.toggle('off', !!d.workHours && (hour < 9 || hour >= 18));
-          const meta = [];
+          const meta = [gmt(offsetMin(now, tz))];
           const dd = dayDiff(now, tz);
           if (d.date) meta.push(now.toLocaleDateString([], { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short' }));
-          if (li.classList.contains('here')) meta.push('Your time zone');
-          else if (d.diff !== false) {
+          if (!li.classList.contains('here') && d.diff !== false) {
             const m = offsetMin(now, tz) - here;
-            const rel = m === 0 ? 'Same time' : `${m > 0 ? '+' : '−'}${fmtHrs(Math.abs(m))}`;
-            meta.push(d.date || !dd ? rel : `${dd > 0 ? 'Tomorrow' : 'Yesterday'}, ${rel}`);
-          } else if (!d.date && dd) meta.push(dd > 0 ? 'Tomorrow' : 'Yesterday');
+            if (m) meta.push(`${m > 0 ? '+' : '−'}${fmtHrs(Math.abs(m))}`);
+          }
+          if (!d.date && dd) meta.push(dd > 0 ? 'Tomorrow' : 'Yesterday');
           if (d.workHours && (hour < 9 || hour >= 18)) meta.push('Off hours');
-          li.querySelector('.wc-meta').textContent = meta.join(' · ');
+          li.querySelector('.wcx-meta').textContent = meta.join(' · ');
         }
       }
 
@@ -355,7 +382,6 @@ export const WIDGET_TYPES = {
         { label: 'Date', get: () => !!d.date, set: (v) => { d.date = v; } },
         { label: 'Seconds', get: () => !!d.seconds, set: (v) => { d.seconds = v; } },
         { label: 'Difference', title: 'How far ahead or behind you', get: () => d.diff !== false, set: (v) => { d.diff = v; } },
-        { label: 'Day / night', get: () => d.daynight !== false, set: (v) => { d.daynight = v; } },
         { label: 'Off hours', title: 'Dim cities outside 9 am – 6 pm their time', get: () => !!d.workHours, set: (v) => { d.workHours = v; } },
       ];
     },
@@ -363,7 +389,7 @@ export const WIDGET_TYPES = {
       const d = migrateClock(w.data);
       return [
         { label: 'Cities', hint: 'Rename a city by typing over it', custom: (box, changed) => cityEditor(box, d, changed) },
-        { label: 'Layout', choice: [['list', 'List'], ['grid', 'Grid']], get: () => d.layout || 'list', set: (v) => { d.layout = v; } },
+        { label: 'Layout', choice: [['list', 'Stack'], ['grid', 'Grid']], hint: 'With two or more cities', get: () => d.layout || 'list', set: (v) => { d.layout = v; } },
         { label: 'Time format', hint: 'Auto follows the main clock', choice: [['auto', 'Auto'], ['12', '12h'], ['24', '24h']], get: () => d.format || 'auto', set: (v) => { d.format = v; } },
       ];
     },
@@ -373,11 +399,12 @@ export const WIDGET_TYPES = {
   // Grows on its own: 2×2 holds 4 apps, then 2×4, 4×4, 6×4. No Size setting.
   folder: {
     name: 'App folder',
-    description: 'Group apps from the bar into a folder.',
+    description: 'Shortcuts to your apps, grouped in a folder. They stay on the bar too.',
     icon: ICONS.folder,
     size: '2x2',
-    sizes: ['2x2', '2x4', '4x4', '6x4'],
+    sizes: ['2x2', '2x4', '4x2', '4x4'],
     dynamicSize: true,
+    hideName: true, // the icons say what it is
     create: () => ({ ids: [] }),
     mount(body, w, api) {
       const d = w.data;
@@ -385,13 +412,15 @@ export const WIDGET_TYPES = {
       const grid = body.querySelector('.fd-grid');
       const all = () => api.apps?.all() || [];
       // Drop ids of apps that were deleted since.
-      const mine = () => (d.ids = (d.ids || []).filter((id) => all().some((a) => a.id === id)));
-      const appIcon = (app) => { const img = document.createElement('img'); img.alt = ''; img.draggable = false; img.src = api.apps.icon(app); return img; };
+      // Apps this mode has (a folder moved from another mode keeps the others for when it goes back).
+      const mine = () => (d.ids || []).filter((id) => all().some((a) => a.id === id));
+      const appIcon = (app) => { const img = document.createElement('img'); img.alt = ''; img.draggable = false; img.dataset.appIcon = app.id; img.src = api.apps.icon(app); return img; };
       const changed = () => { api.save(); api.apps.changed(); draw(); };
       let dragId = null;
 
       function put(id) {
         if (!id || mine().includes(id) || !all().some((a) => a.id === id)) return;
+        d.ids = d.ids || [];
         const before = w.size;
         if (!api.fitFolder?.(mine().length + 1)) return; // grows if needed; refuses when there's no room
         d.ids.push(id);
@@ -414,13 +443,13 @@ export const WIDGET_TYPES = {
           a.title = app.name;
           if (d.newTab) { a.target = '_blank'; a.rel = 'noopener'; }
           a.append(appIcon(app));
-          a.insertAdjacentHTML('beforeend', `<span class="fd-name"></span><button type="button" class="fd-out" title="Back to the bar">${ICONS.x}</button>`);
+          a.insertAdjacentHTML('beforeend', `<span class="fd-name"></span><button type="button" class="fd-out" title="Remove from folder">${ICONS.x}</button>`);
           a.querySelector('.fd-name').textContent = app.name;
           const out = a.querySelector('.fd-out');
-          out.setAttribute('aria-label', `Move ${app.name} back to the bar`);
+          out.setAttribute('aria-label', `Remove ${app.name} from this folder`);
           out.addEventListener('click', (e) => {
             e.preventDefault(); e.stopPropagation();
-            d.ids = mine().filter((x) => x !== id);
+            d.ids = (d.ids || []).filter((x) => x !== id);
             changed();
           });
           // drag to reorder inside the folder
@@ -479,14 +508,14 @@ export const WIDGET_TYPES = {
     ownName: true, // its own "Show folder name" switch instead of the generic Name pill
     settings: (w, ctx) => [
       { label: 'Folder name', text: true, placeholder: 'App folder', get: () => w.data.title, set: (v) => { w.data.title = v; } },
-      { label: 'Show folder name', hint: 'Off hides the folder’s title bar', get: () => w.showName !== false, set: (v) => { w.showName = v; } },
+      { label: 'Show folder name', hint: 'Off hides the folder’s title bar', get: () => nameShown(w), set: (v) => { w.showName = v; } },
       { label: 'Show app names', hint: 'Icons shrink a little to make room', get: () => !w.data.hideNames, set: (v) => { w.data.hideNames = !v; } },
       { label: 'Open apps in a new tab', get: () => !!w.data.newTab, set: (v) => { w.data.newTab = v; } },
       { label: 'Icon size', choice: [['s', 'S'], ['m', 'M'], ['l', 'L']], get: () => w.data.size || 'm', set: (v) => { w.data.size = v; } },
       {
         actions: [
           { label: 'Add apps…', run: () => { setTimeout(() => ctx.openPicker?.(), 0); } },
-          { label: 'All back to bar', disabled: () => !(w.data.ids || []).length, run: () => { w.data.ids = []; ctx.apps?.changed(); } },
+          { label: 'Empty folder', disabled: () => !(w.data.ids || []).length, run: () => { w.data.ids = []; } },
         ],
       },
     ],
@@ -502,6 +531,7 @@ WIDGET_TYPES.pinterest = {
   name: 'Pinterest',
   description: 'Fresh pins from boards or accounts you pick.',
   icon: ICONS.pin,
+  theme: {}, // its own look ("Default"): white
   size: '4x4',
   create: () => ({ source: 'links', links: [], count: 6, layout: 'grid', every: 60, titles: false }),
   mount(body, w, api) {
@@ -513,16 +543,16 @@ WIDGET_TYPES.pinterest = {
     let note = '';
 
     const message = (text, action) => {
-      box.innerHTML = `<div class="pn-msg"><p></p>${action ? '<button type="button"></button>' : ''}</div>`;
+      box.innerHTML = `<div class="pn-msg">${action ? `<span class="pn-logo">${ICONS.pin}</span>` : ''}<p></p>${action ? '<button type="button"></button>' : ''}</div>`;
       box.querySelector('p').textContent = text;
-      if (action) { const b = box.querySelector('button'); b.textContent = action; b.addEventListener('click', () => api.openSettings?.()); }
+      if (action) { const b = box.querySelector('button'); b.textContent = action; b.addEventListener('click', () => api.connect?.()); }
     };
 
     function draw() {
       if (!pins.length) return;
       const layout = d.layout || 'grid';
-      const room = w.size === '2x2' ? 1 : w.size === '2x4' ? 3 : w.size === '6x4' ? 10 : 6;
-      const cols = w.size === '2x2' ? 1 : w.size === '6x4' ? 5 : 3;
+      const room = w.size === '2x2' ? 1 : w.size === '2x4' ? 2 : w.size === '4x2' ? 3 : w.size === '6x4' ? 10 : 6;
+      const cols = w.size === '2x2' || w.size === '2x4' ? 1 : w.size === '6x4' ? 5 : 3;
       const shown = layout === 'grid' ? pins.slice(0, room) : [pins[slide % pins.length]];
       box.innerHTML = '';
       const wrap = document.createElement('div');
@@ -557,12 +587,12 @@ WIDGET_TYPES.pinterest = {
     async function load(force = false) {
       let feeds;
       if (d.source === 'account') {
-        if (!(await P.isSignedIn())) return message('Sign in to Pinterest to see new pins from people you follow.', 'Set up sign-in');
+        if (!(await P.isSignedIn())) return message('Sign in to Pinterest to see new pins from people you follow.', 'Connect Pinterest');
         try { feeds = await P.accountFeeds({ force }); } catch (e) { return message(e.message || 'Couldn’t reach Pinterest.', 'Settings'); }
         if (!feeds.length) return message('You don’t follow anyone on Pinterest yet, so there are no new pins to show.');
       } else {
         feeds = (d.links || []).map(P.toFeed).filter(Boolean);
-        if (!feeds.length) return message('Pick Pinterest accounts or boards to see their newest pins.', 'Add accounts');
+        if (!feeds.length) return message('Fresh pins from the boards and people you like.', 'Connect Pinterest');
       }
       if (!pins.length) box.innerHTML = `<div class="pn-grid loading" style="--cols:3">${'<span class="pn-pin"></span>'.repeat(6)}</div>`;
       const { pins: got, failed } = await P.loadPins(feeds, { max: 24, force });
@@ -590,9 +620,32 @@ WIDGET_TYPES.pinterest = {
     { label: 'Titles', title: 'Always show pin titles (otherwise on hover)', get: () => !!w.data.titles, set: (v) => { w.data.titles = v; } },
     { label: 'Source', title: 'Which account or board each pin is from', get: () => !!w.data.showSource, set: (v) => { w.data.showSource = v; } },
   ],
+  // Right-click → Edit, or the button in the widget.
+  connect: {
+    title: 'Connect Pinterest',
+    render(box, w, { changed, redraw, close }) {
+      const d = w.data;
+      const acct = d.source === 'account';
+      box.innerHTML = `
+        <div class="wcn-tabs" role="tablist">
+          <button type="button" role="tab" data-src="links" aria-selected="${!acct}">Boards &amp; people</button>
+          <button type="button" role="tab" data-src="account" aria-selected="${acct}">My account</button>
+        </div>
+        ${acct
+          ? '<ol class="wcn-steps"><li>Sign in with a Pinterest developer app (advanced).</li><li>New pins from everyone you follow show up here.</li></ol>'
+          : '<ol class="wcn-steps"><li>Open a Pinterest profile or board you like.</li><li>Copy its address from the address bar, or just type <b>@name</b>.</li><li>Paste it below and press Enter. Add as many as you like.</li></ol>'}
+        <div class="wcn-editor"></div>
+        <div class="wcn-actions"><span></span><button type="button" class="btn primary wcn-done">Done</button></div>`;
+      box.querySelectorAll('[data-src]').forEach((b) => b.addEventListener('click', () => {
+        if (b.dataset.src === (d.source || 'links')) return;
+        d.source = b.dataset.src; changed(); redraw();
+      }));
+      (acct ? accountEditor : linkEditor)(box.querySelector('.wcn-editor'), w, changed, redraw);
+      box.querySelector('.wcn-done').addEventListener('click', close);
+      setTimeout(() => box.querySelector('.wcn-editor input')?.focus(), 50);
+    },
+  },
   settings: (w) => [
-    { label: 'Pins from', redraw: true, choice: [['links', 'Links'], ['account', 'My account']], get: () => w.data.source || 'links', set: (v) => { w.data.source = v; } },
-    { custom: (box, changed, redraw) => ((w.data.source === 'account' ? accountEditor : linkEditor)(box, w, changed, redraw)) },
     { label: 'Layout', hint: 'The widget size decides how many pins fit', choice: [['grid', 'Grid'], ['one', 'One'], ['slides', 'Slides']], get: () => w.data.layout || 'grid', set: (v) => { w.data.layout = v; } },
     { label: 'Check for new pins', choice: [['30', '30m'], ['60', '1h'], ['180', '3h']], get: () => String(w.data.every || 60), set: (v) => { w.data.every = +v; } },
     { actions: [{ label: 'Refresh now', run: () => { pinMemo.delete(w.id); w._force = true; } }] },
@@ -848,7 +901,7 @@ function fmtHrs(min) {
 
 /* ---------------- layer ---------------- */
 
-export function createWidgetLayer({ layer, getList, save, getBounds, getSettings, apps }) {
+export function createWidgetLayer({ layer, getList, save, getBounds, getSettings, apps, modes }) {
   // The area widgets may occupy: below the mode switcher, above the cards and bar.
   const bounds = () => (getBounds ? getBounds() : { left: 8, top: 8, right: innerWidth - 8, bottom: innerHeight - 8 });
   function clampTo(x, y, w, h) {
@@ -864,28 +917,64 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
 
   /* ---------- the grid ---------- */
   const gridOn = () => !getSettings?.()?.widgetsFree;
-  const cellsOf = (w, size = w.size) => CELLS[size] || CELLS['2x4'];
+  const cellsOf = (w, size = w.size) => CELLS[size] || CELLS['4x2'];
   const cellsEl = document.createElement('div');
   cellsEl.className = 'w-grid';
   const slot = document.createElement('div');
   slot.className = 'w-slot';
   free.before(cellsEl, slot); // under the widgets
   let gridKey = '';
+  // The grid is sized for the whole screen, not the window, so widgets keep their size and spot
+  // when the window is resized. A narrower window shows part of it (scroll sideways for the rest);
+  // a shorter one cuts it off above the bar. Both cut edges fade out.
+  let scrollX = 0;
+  let view = { left: 0, right: innerWidth, bottom: innerHeight, maxX: 0 };
+  const hbar = document.createElement('div');
+  hbar.className = 'w-hbar';
+  hbar.innerHTML = '<span></span>';
+  layer.append(hbar);
   function grid() {
-    // Start from a 2×2 about a fifth of the window tall, then grow the cells a little
-    // so the columns fill the width exactly, edge to edge with the top buttons.
     const b = bounds();
-    const width = b.right - b.left;
-    const small = Math.min(212, Math.max(150, innerHeight * 0.2));
+    const viewW = b.right - b.left;
+    const chrome = Math.max(0, outerHeight - innerHeight);
+    const fullW = Math.max(innerWidth, screen.availWidth || innerWidth);
+    const fullH = Math.max(innerHeight, (screen.availHeight || innerHeight) - chrome);
+    const width = viewW + (fullW - innerWidth);
+    const height = (b.bottom - b.top) + (fullH - innerHeight);
+    // Start from a 2×2 about a fifth of the screen tall, then grow the cells a little
+    // so the columns fill the full width exactly, edge to edge with the top buttons.
+    const small = Math.min(212, Math.max(150, fullH * 0.2));
     const ratio = 2 / 9; // gap ÷ cell, so the gap is a tenth of a 2×2
-    const across = Math.max(2, Math.floor((width / (small * 0.45) + ratio) / (1 + ratio)));
-    const unit = width / (across + (across - 1) * ratio);
+    const fitAcross = Math.max(2, Math.floor((width / (small * 0.45) + ratio) / (1 + ratio)));
+    const fullUnit = width / (fitAcross + (fitAcross - 1) * ratio);
+    const fullPitch = fullUnit * (1 + ratio);
+    // Never smaller than the widgets already placed (e.g. after moving to a smaller screen),
+    // so nothing is pushed on top of anything else; the extra just scrolls.
+    let needX = 0, needY = 0;
+    if (gridOn()) for (const x of getList()) {
+      if (x.gx == null) continue;
+      const [cw, ch] = cellsOf(x);
+      needX = Math.max(needX, x.gx + cw); needY = Math.max(needY, x.gy + ch);
+    }
+    const across = Math.max(fitAcross, Math.min(needX, fitAcross * 2));
+    const down = Math.max(2, Math.floor((height + fullUnit * ratio) / fullPitch), needY);
+    // A smaller window shrinks the whole grid to fit, both ways, keeping every widget's spot.
+    // Only once a 2×2 would drop below ~140px does it stop shrinking and get cut off instead.
+    const fitW = viewW / (across + (across - 1) * ratio);
+    const fitH = (b.bottom - b.top) / (down + (down - 1) * ratio);
+    const MIN = 140 / (2 + ratio);
+    const unit = Math.max(Math.min(fullUnit, fitW, fitH), Math.min(fullUnit, MIN));
     const gap = unit * ratio;
     layer.style.setProperty('--wu', unit + 'px');
     layer.style.setProperty('--wg', gap + 'px');
     const pitch = unit + gap;
-    const down = Math.max(2, Math.floor((b.bottom - b.top + gap) / pitch));
-    const left = b.left;
+    const canvasW = across * pitch - gap;
+    const maxX = canvasW - viewW > 1 ? Math.round(canvasW - viewW) : 0;
+    scrollX = Math.min(Math.max(0, scrollX), maxX);
+    // A short window can leave the shrunken grid narrower than the window: keep it centred.
+    const left = b.left - scrollX + Math.max(0, (viewW - canvasW) / 2);
+    // When it scrolls sideways, the widgets end a little higher to make room for the scrollbar.
+    view = { left: b.left, right: b.right, bottom: b.bottom - (maxX > 0 ? 24 : 0), maxX, canvasW, viewW };
     const g = { across, down, left, top: b.top, pitch, unit, gap };
     const key = `${across}:${down}:${left}:${b.top}:${pitch}`;
     if (key !== gridKey) {
@@ -893,11 +982,96 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       cellsEl.style.cssText = `left:${left}px;top:${b.top}px;grid-template-columns:repeat(${across},${unit}px);grid-auto-rows:${unit}px;gap:${gap}px`;
       cellsEl.innerHTML = '<span></span>'.repeat(across * down);
       Object.assign(layer.querySelector('.w-zone').style, {
-        left: left + 'px', top: b.top + 'px', width: width + 'px', height: (b.bottom - b.top) + 'px',
+        left: b.left + 'px', top: b.top + 'px', width: viewW + 'px', height: (b.bottom - b.top) + 'px',
       });
     }
+    paintScrollbar();
     return g;
   }
+
+  // Fade a widget where the window cuts it: the left/right window edges and the bottom of the
+  // widget area. Each widget gets its own mask, so its frosted glass keeps working.
+  const FADE = 44;
+  function cutEdges() {
+    const grid = gridOn();
+    for (const el of mounted.values()) {
+      if (!grid || el.classList.contains('dragging')) { el.style.maskImage = el.style.webkitMaskImage = ''; continue; }
+      const r = el.getBoundingClientRect();
+      const fadeL = view.maxX > 0 && scrollX > 0 && r.left < FADE;
+      const fadeR = view.maxX > 0 && scrollX < view.maxX && r.right > innerWidth - FADE;
+      const fadeB = r.bottom > view.bottom + 1;
+      if (!fadeL && !fadeR && !fadeB) { el.style.maskImage = el.style.webkitMaskImage = ''; continue; }
+      // The mask reaches PAD px past the widget on every side, so its shadow isn't cut away.
+      const PAD = 70, ox = r.left - PAD, oy = r.top - PAD;
+      const x0 = fadeL ? `transparent ${-ox}px, #000 ${FADE - ox}px` : '#000 0';
+      const x1 = fadeR ? `#000 ${innerWidth - FADE - ox}px, transparent ${innerWidth - ox}px` : '#000 100%';
+      const yEnd = view.bottom - oy;
+      const y = fadeB ? `#000 ${yEnd - FADE}px, transparent ${yEnd}px` : '#000 100%';
+      const m = `linear-gradient(to right, ${x0}, ${x1}), linear-gradient(to bottom, #000 0, ${y})`;
+      el.style.maskImage = el.style.webkitMaskImage = m;
+      el.style.maskSize = el.style.webkitMaskSize = `calc(100% + ${PAD * 2}px) calc(100% + ${PAD * 2}px)`;
+      el.style.maskPosition = el.style.webkitMaskPosition = `${-PAD}px ${-PAD}px`;
+      el.style.maskRepeat = el.style.webkitMaskRepeat = 'no-repeat';
+      el.style.maskClip = 'no-clip';
+      el.style.maskComposite = 'intersect';
+      el.style.webkitMaskComposite = 'source-in';
+    }
+  }
+
+  // Sideways scrolling when the window is narrower than the widget grid:
+  // trackpad swipe, Shift + mouse wheel, or the thin bar under the widgets.
+  function paintScrollbar() {
+    const on = gridOn() && view.maxX > 0;
+    hbar.hidden = !on;
+    if (!on) return;
+    // A short bar, centred under the widgets with some room around it.
+    const barW = Math.min(220, Math.max(90, view.viewW * 0.3));
+    hbar.style.left = (view.left + (view.viewW - barW) / 2) + 'px';
+    hbar.style.width = barW + 'px';
+    hbar.style.top = (view.bottom + 5) + 'px';
+    const tw = Math.max(28, barW * (view.viewW / view.canvasW));
+    const thumb = hbar.firstElementChild;
+    thumb.style.width = tw + 'px';
+    thumb.style.transform = `translateX(${(barW - tw) * (scrollX / view.maxX)}px)`;
+  }
+  function scrollTo(x) {
+    const next = Math.min(Math.max(0, x), view.maxX);
+    if (next === scrollX) return;
+    scrollX = next;
+    render();
+    hbar.classList.add('active');
+    clearTimeout(hbar.t);
+    hbar.t = setTimeout(() => hbar.classList.remove('active'), 900);
+  }
+  addEventListener('wheel', (e) => {
+    if (!gridOn() || view.maxX <= 0 || layer.classList.contains('hidden-widgets')) return;
+    const b = bounds();
+    if (e.clientY < b.top || e.clientY > view.bottom + 20) return;
+    const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.shiftKey ? e.deltaY : 0;
+    if (!dx) return;
+    // a widget that scrolls sideways itself keeps the wheel
+    for (let n = e.target; n && n !== document.body; n = n.parentElement) {
+      if (n.scrollWidth > n.clientWidth + 1 && /(auto|scroll)/.test(getComputedStyle(n).overflowX)) return;
+    }
+    e.preventDefault();
+    scrollTo(scrollX + dx);
+  }, { passive: false });
+  hbar.addEventListener('pointerdown', (e) => {
+    const thumb = hbar.firstElementChild;
+    const x0 = e.clientX, s0 = scrollX;
+    const per = view.maxX / Math.max(1, hbar.offsetWidth - thumb.offsetWidth);
+    if (e.target !== thumb) { // click the track: jump there
+      const r = hbar.getBoundingClientRect();
+      scrollTo(((e.clientX - r.left - thumb.offsetWidth / 2) / Math.max(1, r.width - thumb.offsetWidth)) * view.maxX);
+      return;
+    }
+    e.preventDefault();
+    const move = (ev) => scrollTo(s0 + (ev.clientX - x0) * per);
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  });
+
   function takenBy(list, except) {
     const set = new Set();
     for (const x of list) {
@@ -938,14 +1112,14 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
   }
   const cellPx = (g, p) => ({ x: g.left + p.x * g.pitch, y: g.top + p.y * g.pitch });
   // App folder: how many apps fit, and the next size up when it's full.
-  const FOLDER_SIZES = ['2x2', '2x4', '4x4', '6x4'];
-  const folderCols = (size) => (size === '6x4' ? 6 : size === '2x2' ? 2 : 4);
-  const folderRows = (size) => (size === '2x2' || size === '2x4' ? 2 : 4);
+  const FOLDER_SIZES = ['2x2', '4x2', '4x4'];
+  const folderCols = (size) => (size === '6x4' ? 6 : size === '2x2' || size === '2x4' ? 2 : 4);
+  const folderRows = (size) => (size === '2x2' || size === '4x2' ? 2 : 4);
   const folderCap = (size) => folderCols(size) * folderRows(size);
   // Grow the folder until it can hold n apps. False when the page has no room.
   function fitFolder(w, n) {
     while (folderCap(w.size) < n) {
-      const i = FOLDER_SIZES.indexOf(w.size);
+      const i = FOLDER_SIZES.indexOf(w.size === '2x4' ? '4x2' : w.size); // tall grows to 4x4 next
       if (i < 0 || i >= FOLDER_SIZES.length - 1) { showNoRoom(); return false; }
       if (!resizeTo(w, FOLDER_SIZES[i + 1])) return false;
     }
@@ -968,7 +1142,7 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     applySize(w);
     const look = lookOf(w);
     el.className = `widget type-${w.type} size-${w.size}`
-      + (w.showName === false ? ' no-name' : '')
+      + (nameShown(w) ? '' : ' no-name')
       + (look === 'own' ? ' theme-own' : look !== 'glass' ? ' bg-' + look : '');
     el.dataset.id = w.id;
     // Every widget gets this same header: icon, name, count. Settings open from the right-click menu.
@@ -978,10 +1152,12 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     type.mount(el.querySelector('.w-body'), w, {
       save, settings: getSettings, apps,
       setCount: (t) => { count.textContent = t; },
-      openSettings: () => openMenu(w),
+      openSettings: () => openConnect(w), // empty states ('Choose cities' etc.) open Edit
       folderCap, folderCols, folderRows, fitFolder: (n) => fitFolder(w, n),
       openPicker: (at) => openPicker(w, at),
       refresh: () => refresh(w),
+      connect: () => openConnect(w),
+      // 'Edit' from inside a widget (e.g. an empty world clock's 'Choose cities')
     });
     enableDrag(el, w);
     return el;
@@ -993,7 +1169,6 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     const list = getList();
     list.splice(list.indexOf(w), 1);
     save(); render();
-    if (w.type === 'folder') apps?.changed(); // its apps go back to the bar
   }
 
   // Redraw one widget after a setting changed, keeping its place.
@@ -1016,6 +1191,22 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
   menu.hidden = true;
   document.body.append(menu);
   let menuFor = null;
+  /* ---------- Edit (what the widget shows) and Settings… (how it looks) ---------- */
+  // Both open beside the widget. Edit is wider when it needs to be (connecting a calendar, Pinterest).
+  // A type with `connect: { title, render(box, w, { done, close, changed, redraw }) }` shows that first in Edit.
+  let menuMode = 'settings';
+  const canEdit = (type) => !!(type?.connect || type?.settings || type?.editFocus);
+  function openConnect(w, at = null) {
+    const type = WIDGET_TYPES[w.type];
+    // Nothing to set: Edit just puts you in the widget (e.g. a sticky note's text).
+    if (!type?.connect && !type?.settings) {
+      closeMenu();
+      mounted.get(w.id)?.querySelector(type?.editFocus || 'textarea, input')?.focus();
+      return;
+    }
+    openMenu(w, at, 'edit');
+  }
+
   function closeMenu() {
     if (menu.hidden) return;
     mounted.get(menuFor?.id)?.classList.remove('w-editing');
@@ -1025,8 +1216,10 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
   document.addEventListener('pointerdown', (e) => { if (!menu.contains(e.target)) closeMenu(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
-  function openMenu(w, at = null) {
+  function openMenu(w, at = null, mode = 'settings') {
     closeMenu();
+    menuMode = mode;
+    menu.classList.toggle('w-menu-edit', mode === 'edit' && !!WIDGET_TYPES[w.type]?.connect);
     menuFor = w;
     mounted.get(w.id)?.classList.add('w-editing');
     drawMenu(w);
@@ -1064,14 +1257,21 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     // The widget's own settings first, then how it looks. On/off things share one row of pills.
     const own = type.settings?.(w, { apps, openPicker: () => openPicker(w) }) || [];
     const sizes = sizesOf(w.type);
+    if (menuMode === 'edit') return drawEdit(w, type, own);
     const rows = [
-      ...own,
-      { section: 'Look' },
-      ...(!type.dynamicSize && sizes.length > 1 ? [{ label: 'Size', choice: sizes, redraw: true, get: () => w.size, set: (v) => { resizeTo(w, v); } }] : []),
+      ...(sizes.length > 1 ? [{
+        label: 'Size', choice: sizes, redraw: true, get: () => w.size,
+        ...(type.dynamicSize ? { hint: 'Grows by itself when it fills up' } : {}),
+        set: (v) => {
+          // A folder can't shrink below the apps in it.
+          const n = (w.data.ids || []).length;
+          if (type.dynamicSize && folderCap(v) < n) { showNoRoom(`That size holds ${folderCap(v)} apps. Take some out first.`); return; }
+          resizeTo(w, v);
+        },
+      }] : []),
       { label: 'Theme', choice: themesOf(type), get: () => lookOf(w), set: (v) => { w.bg = v; } },
     ];
     const chips = [
-      ...(type.ownName ? [] : [{ label: 'Name', get: () => w.showName !== false, set: (v) => { w.showName = v; } }]),
       ...(type.chips?.(w) || []),
     ];
     if (chips.length) rows.push({ label: 'Show', chips });
@@ -1086,6 +1286,28 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     const foot = menuRow(w, { actions: [{ label: 'Remove widget', danger: true, run: () => remove(w), keepClosed: true }] });
     foot.classList.add('w-menu-foot');
     menu.append(foot);
+  }
+
+  function drawEdit(w, type, own) {
+    menu.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'w-menu-head';
+    head.innerHTML = `<span class="w-menu-icon">${type.icon}</span><div class="w-menu-titles"><div class="w-menu-title"></div><div class="w-menu-kind">Edit</div></div>`;
+    head.querySelector('.w-menu-title').textContent = type.connect?.title || w.data.title || type.name;
+    menu.append(head);
+    if (type.connect) {
+      const box = document.createElement('div');
+      box.className = 'wcn-body';
+      menu.append(box);
+      type.connect.render(box, w, {
+        changed: () => { save(); refresh(w); },
+        done: () => { save(); refresh(w); closeMenu(); },
+        close: () => closeMenu(),
+        redraw: () => { if (menuFor === w) { drawMenu(w); placeMenu(w); } },
+      });
+    }
+    if (own.length && type.connect) menu.append(Object.assign(document.createElement('div'), { className: 'w-menu-section', textContent: 'More' }));
+    for (const it of own) menu.append(menuRow(w, it));
   }
 
   /* ---------- App folder: "Add apps" popup (same look as the settings menu) ---------- */
@@ -1125,14 +1347,14 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     find.focus({ preventScroll: true });
   }
 
-  // This folder's apps (ticked) and the apps on the bar, filtered by the search box.
+  // This folder's apps (ticked) first, then the rest of your apps, filtered by the search box.
   function drawPicker(w) {
     const list = picker.querySelector('.fd-pick-list');
     const q = picker.querySelector('.fd-find').value.trim().toLowerCase();
     const mine = (w.data.ids || []).filter((id) => apps.all().some((a) => a.id === id));
-    const rows = [...mine.map((id) => apps.all().find((a) => a.id === id)), ...apps.onBar()]
+    const rows = [...mine.map((id) => apps.all().find((a) => a.id === id)), ...apps.all().filter((a) => !mine.includes(a.id))]
       .filter((a) => !q || a.name.toLowerCase().includes(q));
-    list.innerHTML = rows.length ? '' : `<p class="fd-empty">${q ? 'No app matches that.' : apps.all().length ? 'All your apps are in other folders.' : 'No apps yet. Add some to the bar with + first.'}</p>`;
+    list.innerHTML = rows.length ? '' : `<p class="fd-empty">${q ? 'No app matches that.' : 'No apps yet. Add some to the bar with + first.'}</p>`;
     for (const app of rows) {
       const on = mine.includes(app.id);
       const b = document.createElement('button');
@@ -1144,9 +1366,10 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       b.querySelector('img').src = apps.icon(app);
       b.querySelector('span').textContent = app.name;
       b.addEventListener('click', () => {
-        const ids = w.data.ids = (w.data.ids || []).filter((id) => apps.all().some((a) => a.id === id));
+        const ids = w.data.ids = w.data.ids || [];
+        const here = ids.filter((id) => apps.all().some((a) => a.id === id)).length;
         if (on) w.data.ids = ids.filter((id) => id !== app.id);
-        else { if (!fitFolder(w, ids.length + 1)) return; ids.push(app.id); }
+        else { if (!fitFolder(w, here + 1)) return; ids.push(app.id); }
         save(); apps.changed(); refresh(w);
         mounted.get(w.id)?.classList.add('w-editing');
         drawPicker(w);
@@ -1230,6 +1453,7 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       b.type = 'button';
       b.className = 'w-menu-btn' + (it.danger ? ' danger' : '');
       b.textContent = it.label;
+      if (it.title) b.title = it.title;
       b.disabled = !!it.disabled?.();
       b.addEventListener('click', async () => {
         if (it.keepClosed) { closeMenu(); return it.run(); }
@@ -1241,6 +1465,28 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     }
     const row = document.createElement(it.choice ? 'div' : 'label');
     row.className = 's-row';
+    if (it.stepper) {
+      // − value + : for numbers like minutes
+      const { min = 0, max = 99, step = 1, unit = '', zero } = it.stepper;
+      const row = document.createElement('div');
+      row.className = 's-row';
+      const box = document.createElement('div');
+      box.className = 'w-stepper';
+      box.innerHTML = '<button type="button" aria-label="Less">−</button><output></output><button type="button" aria-label="More">+</button>';
+      const [less, more] = box.querySelectorAll('button');
+      const out = box.querySelector('output');
+      const show = () => {
+        const v = it.get();
+        out.textContent = v === 0 && zero ? zero : `${v} ${unit}`.trim();
+        less.disabled = v <= min; more.disabled = v >= max;
+      };
+      const bump = (dir) => { const v = Math.min(max, Math.max(min, it.get() + dir * step)); if (v !== it.get()) { commit(v); show(); } };
+      less.addEventListener('click', () => bump(-1));
+      more.addEventListener('click', () => bump(1));
+      show();
+      row.append(labelBlock(), box);
+      return row;
+    }
     if (it.choice) {
       const seg = document.createElement('div');
       seg.className = 's-seg';
@@ -1334,6 +1580,7 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
       el.style.left = px.x + 'px';
       el.style.top = px.y + 'px';
     }
+    cutEdges();
     if (changed) save();
   }
 
@@ -1358,19 +1605,41 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
   toast.textContent = 'No space for this widget';
   layer.append(toast);
   let toastTimer;
-  function showNoRoom() {
+  function showNoRoom(text = 'No space for this widget') {
+    toast.textContent = text;
     toast.classList.add('in');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toast.classList.remove('in'), 2200);
   }
+  // Pick a widget up by its title bar or anywhere along its border (a thin band inside the edge).
+  // It only lifts once the pointer actually moves, so clicks near the edge still do what they did.
+  const EDGE = 14;     // px band along every edge
+  const LIFT = 4;      // px of movement before it lifts
   function enableDrag(el, w) {
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
-      if (e.target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
-      const top = el.getBoundingClientRect().top;
-      if (e.clientY - top > 44) return;
-      e.preventDefault();
-      startMove(el, w, e);
+      if (e.target.closest('button, a, input, textarea, select, label, [contenteditable="true"]')) return;
+      const r = el.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      const onHead = y <= 44;
+      const onEdge = x <= EDGE || y <= EDGE || r.width - x <= EDGE || r.height - y <= EDGE;
+      if (!onHead && !onEdge) return;
+      // leave scrollbars alone
+      const t = e.target;
+      if (t !== el && t.scrollHeight > t.clientHeight && e.offsetX >= t.clientWidth) return;
+      const pid = e.pointerId, x0 = e.clientX, y0 = e.clientY;
+      const off = () => { removeEventListener('pointermove', wait); removeEventListener('pointerup', off); removeEventListener('pointercancel', off); };
+      const wait = (ev) => {
+        if (ev.pointerId !== pid || Math.hypot(ev.clientX - x0, ev.clientY - y0) < LIFT) return;
+        off();
+        getSelection()?.removeAllRanges();
+        startMove(el, w, e);
+        // catch up to where the pointer already is
+        dispatchEvent(new PointerEvent('pointermove', { pointerId: pid, clientX: ev.clientX, clientY: ev.clientY, bubbles: true }));
+      };
+      addEventListener('pointermove', wait);
+      addEventListener('pointerup', off);
+      addEventListener('pointercancel', off);
     });
   }
 
@@ -1498,7 +1767,8 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCtx(); });
   layer.addEventListener('contextmenu', (e) => {
     const el = e.target.closest('.widget');
-    if (!el || e.target.closest('input, textarea, select')) return; // keep the normal menu for typing
+    // keep the normal menu for typing (a sticky note is all text, so it gets the widget menu)
+    if (!el || (e.target.closest('input, textarea, select') && !e.target.closest('.sn-text'))) return;
     const w = getList().find((x) => x.id === el.dataset.id);
     if (!w) return;
     e.preventDefault();
@@ -1507,8 +1777,21 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     ctxAt = { clientX: e.clientX, clientY: e.clientY, pointerId: -1 };
     // Folder: Add app first when the grid is full (no + tile left).
     const folderFull = w.type === 'folder' && (w.data.ids || []).length >= folderCap(w.size);
-    ctxMenu.innerHTML = (folderFull ? '<button type="button" role="menuitem" data-act="add-app">Add app</button><hr>' : '')
-      + '<button type="button" role="menuitem" data-act="settings">Settings…</button><hr><button type="button" role="menuitem" data-act="remove" class="danger">Remove widget</button>';
+    // Other modes: "Move to Work" when there's one, "Move to…" (then pick) when there are several.
+    const others = modes?.others() || [];
+    const moveItem = others.length === 1
+      ? `<button type="button" role="menuitem" data-act="mode" data-mode="${others[0].id}"></button>`
+      : others.length > 1 ? '<button type="button" role="menuitem" data-act="move-to">Move to…</button>' : '';
+    // Types with colours (sticky note): a row of swatches first.
+    const colors = WIDGET_TYPES[w.type]?.colors;
+    const swatches = colors ? '<div class="ctx-swatches" role="radiogroup" aria-label="Colour">'
+      + colors.map(([c, name]) => `<button type="button" role="radio" data-act="color" data-color="${c}" title="${name}" aria-label="${name}" aria-checked="${(w.data.color || colors[0][0]) === c}" style="--sw:${c}"></button>`).join('')
+      + '</div><hr>' : '';
+    ctxMenu.innerHTML = swatches + (folderFull ? '<button type="button" role="menuitem" data-act="add-app">Add app</button><hr>' : '')
+      + (canEdit(WIDGET_TYPES[w.type]) ? '<button type="button" role="menuitem" data-act="edit">Edit</button>' : '')
+      + '<button type="button" role="menuitem" data-act="settings">Settings…</button>' + moveItem
+      + '<hr><button type="button" role="menuitem" data-act="remove" class="danger">Remove widget</button>';
+    if (others.length === 1) ctxMenu.querySelector('[data-act="mode"]').textContent = `Move to ${others[0].name}`;
     ctxMenu.hidden = false;
     const mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
     ctxMenu.style.left = Math.min(e.clientX, innerWidth - mw - 8) + 'px';
@@ -1516,28 +1799,75 @@ export function createWidgetLayer({ layer, getList, save, getBounds, getSettings
     ctxMenu.querySelector('button').focus();
   });
   ctxMenu.addEventListener('click', (e) => {
-    const act = e.target.closest('button')?.dataset.act;
+    const btn = e.target.closest('button');
+    const act = btn?.dataset.act;
     const w = ctxFor;
     if (!act || !w) return;
+    if (act === 'color') {
+      // Recolour in place and keep the menu open, so shades can be compared.
+      w.data.color = btn.dataset.color;
+      layer.querySelector(`.widget[data-id="${w.id}"]`)?.style.setProperty('--note', w.data.color);
+      ctxMenu.querySelectorAll('[data-act="color"]').forEach((b) => b.setAttribute('aria-checked', String(b === btn)));
+      save();
+      return;
+    }
+    if (act === 'move-to') {
+      // Swap the menu for the list of modes, in place.
+      ctxMenu.innerHTML = '<div class="ctx-title">Move to</div>';
+      for (const m of modes.others()) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.setAttribute('role', 'menuitem');
+        b.dataset.act = 'mode'; b.dataset.mode = m.id; b.textContent = m.name;
+        ctxMenu.append(b);
+      }
+      const mh = ctxMenu.offsetHeight;
+      ctxMenu.style.top = Math.max(8, Math.min(parseFloat(ctxMenu.style.top), innerHeight - mh - 8)) + 'px';
+      ctxMenu.querySelector('[data-act="mode"]')?.focus();
+      return;
+    }
     closeCtx();
+    if (act === 'mode') moveToMode(w, btn.dataset.mode);
     if (act === 'settings') openMenu(w, ctxAt);
+    if (act === 'edit') openConnect(w, ctxAt);
     if (act === 'remove') remove(w);
     if (act === 'add-app') {
       openPicker(w, ctxAt);
     }
   });
 
+  // Send a widget to another mode: same spot there if it's free, else the nearest free one.
+  function moveToMode(w, modeId) {
+    const target = modes?.listOf(modeId);
+    const name = modes?.others().find((m) => m.id === modeId)?.name || 'that mode';
+    if (!target) return;
+    const g = grid();
+    const [cw, ch] = cellsOf(w);
+    const taken = takenBy(target);
+    const want = w.gx != null ? { x: w.gx, y: w.gy } : { x: g.across - cw, y: 0 };
+    const p = fitsAt(g, taken, want.x, want.y, cw, ch) ? want : nearestSpot(g, taken, want.x, want.y, cw, ch);
+    if (!p) return showNoRoom(`No space for it in ${name}`);
+    const list = getList();
+    list.splice(list.indexOf(w), 1);
+    const at = cellPx(g, p);
+    w.gx = p.x; w.gy = p.y; w.x = at.x / innerWidth; w.y = at.y / innerHeight;
+    target.push(w);
+    save(); render();
+    if (w.type === 'folder') apps?.changed?.();
+    showNoRoom(`Moved to ${name}`);
+  }
+
   // New widgets go in the free spot nearest the top right.
   function add(type) {
     const list = getList();
     const spec = WIDGET_TYPES[type];
-    const w = { id: 'w_' + uid(), type, dock: 'free', data: spec.create() };
+    const w = { id: 'w_' + uid(), type, dock: 'free', sz: 2, data: spec.create() };
     if (spec.size) w.size = spec.size;
     if (spec.hideName) w.showName = false;
     applySize(w);
     const g = grid();
     const [cw, ch] = cellsOf(w);
-    const p = nearestSpot(g, takenBy(list), g.across - cw, 0, cw, ch);
+    const visRight = Math.min(g.across, Math.floor((scrollX + view.viewW + g.gap) / g.pitch));
+    const p = nearestSpot(g, takenBy(list), Math.max(0, visRight - cw), 0, cw, ch);
     if (!p) return showNoRoom();
     const at = cellPx(g, p);
     w.gx = p.x; w.gy = p.y; w.x = at.x / innerWidth; w.y = at.y / innerHeight;

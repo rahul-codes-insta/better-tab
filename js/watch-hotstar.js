@@ -8,9 +8,9 @@
 //      address (/shows/<show>/<id>/<episode>/<id>/watch), and the page's preview
 //      image when it belongs to this page.
 (() => {
-  const W = window.HorizonWatch;
-  if (!W || window.__horizonHotstar) return;
-  window.__horizonHotstar = true;
+  const W = window.BetterTabWatch;
+  if (!W || window.__betterTabHotstar) return;
+  window.__betterTabHotstar = true;
 
   const CARDS_KEY = 'watch:hotstar-cards';
   const MAX_CARDS = 400;

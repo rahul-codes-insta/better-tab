@@ -9,6 +9,11 @@ import { uiConfirm, uiAlert } from './ui-dialog.js';
 import { createWidgetLayer, WIDGET_TYPES } from './widgets.js';
 import { createSearch, ENGINES } from './search.js';
 import { flip, exit, measure, play } from './motion.js';
+import { openNotes, NOTES_ICON } from './notes.js';
+
+// Built-in Notes app: a tile like any other, opening the notes overlay (newtab.html#notes).
+const NOTES_URL = new URL('newtab.html#notes', location.href).href;
+const notesApp = () => ({ id: 'notes_' + Math.random().toString(36).slice(2, 8), name: 'Notes', url: NOTES_URL, builtin: 'notes', icon: { kind: 'builtin', source: 'custom' } });
 import {
   listWallpapers, getWallpaper, putWallpaper, deleteWallpaper, engineInstalled, downloadEngine, removeEngine, MODEL_SIZE_MB,
 } from './wallstore.js';
@@ -29,6 +34,8 @@ const DEFAULT_SETTINGS = {
   widgetsShown: true,      // top-right button shows / hides widgets
   searchOn: true,          // search bar above the bar / Keep watching
   searchEngine: 'google',  // last service used in the search bar
+  watchOn: true,           // Keep watching row; off gives widgets more room
+  watchInWork: false,      // Keep watching also in Work mode
   continueWatching: true, // Keep watching: Prime Video
   watchNetflix: true,      // Keep watching: Netflix
   watchHotstar: true,      // Keep watching: JioHotstar
@@ -81,6 +88,13 @@ const SHARED_KEYS = ['searchEngine', 'searchApps', 'searchNewTab', 'searchRememb
 function normalize(st) {
   st = migrate(st);
   st.settings = { ...DEFAULT_SETTINGS, ...st.settings };
+  // Notes sits in every mode once by default; after that, removing it is respected.
+  for (const p of st.profiles) {
+    p.apps = p.apps || [];
+    if (!st.notesAdded && !p.apps.some((a) => a.builtin === 'notes')) p.apps.push(notesApp());
+    for (const a of p.apps) if (a.builtin === 'notes') a.url = NOTES_URL; // the extension's address can change
+  }
+  st.notesAdded = true;
   // Older versions had one wallpaper for everything.
   const legacyWall = st.settings.wallpaper;
   for (const p of st.profiles) if (!p.wallpaper) p.wallpaper = legacyWall || 'builtin';
@@ -132,6 +146,7 @@ function applyTypeStyle() {
   root.setProperty('--bar-scale', st.barScale / 100);
   document.body.classList.toggle('clock-mini', !!st.clockMini);
   if (typeof updateArrows === 'function') requestAnimationFrame(updateArrows);
+  if (typeof fitTopbar === 'function') requestAnimationFrame(fitTopbar);
 }
 
 /* ============================ state ============================ */
@@ -217,7 +232,14 @@ async function loadIcons(apps) {
   const keys = apps.filter((a) => a.icon?.kind === 'data' && !iconCache.has(a.id)).map((a) => 'icon:' + a.id);
   if (!keys.length) return;
   const got = await store.get(keys);
-  for (const [k, v] of Object.entries(got)) iconCache.set(k.slice(5), v);
+  for (const [k, v] of Object.entries(got)) {
+    iconCache.set(k.slice(5), v);
+    showIcon(k.slice(5), v);
+  }
+}
+// Icons drawn before their image loaded (e.g. in an app folder) catch up here.
+function showIcon(id, src) {
+  document.querySelectorAll(`img[data-app-icon="${CSS.escape(id)}"]`).forEach((img) => { img.src = src; });
 }
 
 /* ============================ clock ============================ */
@@ -237,6 +259,7 @@ function tick() {
     clockEl.textContent = `${hh}:${m}`;
     dateEl.textContent = now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
     document.title = 'New Tab';
+    if (typeof fitTopbar === 'function') requestAnimationFrame(fitTopbar);
   }
   setTimeout(tick, 1000 - now.getMilliseconds() + 5);
 }
@@ -270,12 +293,71 @@ function renderProfiles() {
     b.title = `${p.name} mode`;
     b.dataset.mode = p.id;
     b.setAttribute('aria-pressed', String(p.id === state.activeProfile));
-    b.addEventListener('click', () => switchMode(p.id));
+    b.addEventListener('click', () => {
+      // Small window: the switch is one round button; tapping it opens the full switch first.
+      if (document.body.classList.contains('tb-compact') && !nav.classList.contains('open')) {
+        nav.classList.add('open');
+        moveThumb(false);
+        return;
+      }
+      nav.classList.remove('open');
+      switchMode(p.id);
+      requestAnimationFrame(() => moveThumb(false));
+    });
     nav.append(b);
   }
   moveThumb(false);
-  document.fonts?.ready.then(() => moveThumb(false)); // widths settle once Inter loads
+  document.fonts?.ready.then(() => { moveThumb(false); fitTopbar(); }); // widths settle once Inter loads
+  fitTopbar();
 }
+
+// The top bar keeps its height at any size, giving things up as the window narrows:
+// 1. the mode switch shrinks to one round button (tap to open it),
+// 2. the small clock drops the date,
+// 3. the night button goes, then 4. the widgets button, and the small clock moves to the right end.
+// The small clock stays centred until then.
+const TB_CLASSES = ['tb-compact', 'tb-no-date', 'tb-no-night', 'tb-no-widgets', 'tb-clock-right'];
+function fitTopbar() {
+  const body = document.body, nav = $('#profiles'), time = $('.time');
+  if (!state || !time) return;
+  nav.classList.remove('open');
+  body.classList.remove(...TB_CLASSES);
+  const W = innerWidth, pad = 26, room = 16, btn = 44, btnGap = 10;
+  const mini = body.classList.contains('clock-mini');
+  const navOn = !nav.hidden;
+  const fullNav = navOn ? nav.offsetWidth : 0;
+  body.classList.add('tb-compact');
+  const smallNav = navOn ? nav.offsetWidth : 0;
+  body.classList.remove('tb-compact');
+  // the small clock's width with and without the date
+  const span = (els) => {
+    const rs = els.filter((e) => e && e.offsetParent !== null).map((e) => e.getBoundingClientRect());
+    return rs.length ? Math.max(...rs.map((x) => x.right)) - Math.min(...rs.map((x) => x.left)) : 0;
+  };
+  const withDate = mini ? span([...time.children]) : 0;
+  const timeOnly = mini ? span([clockEl]) : 0;
+  const levels = mini
+    ? [[], ['tb-compact'], ['tb-compact', 'tb-no-date'], ['tb-compact', 'tb-no-date', 'tb-no-night'],
+      ['tb-compact', 'tb-no-date', 'tb-no-night', 'tb-no-widgets', 'tb-clock-right']]
+    : [[], ['tb-compact'], ['tb-compact', 'tb-no-night'], ['tb-compact', 'tb-no-night', 'tb-no-widgets']];
+  const fits = (lv) => {
+    const left = lv.includes('tb-compact') ? smallNav : fullNav;
+    const nBtn = (lv.includes('tb-no-night') ? 0 : 1) + (lv.includes('tb-no-widgets') ? 0 : 1);
+    const right = nBtn ? nBtn * btn + (nBtn - 1) * btnGap : 0;
+    if (!mini) return pad + left + room + right + pad <= W;
+    const cw = lv.includes('tb-no-date') ? timeOnly : withDate;
+    if (lv.includes('tb-clock-right')) return true;
+    return W / 2 - cw / 2 >= pad + left + room && W / 2 + cw / 2 <= W - pad - right - room;
+  };
+  const pick = levels.find(fits) || levels[levels.length - 1];
+  body.classList.add(...pick);
+  moveThumb(false);
+}
+addEventListener('resize', () => fitTopbar());
+document.addEventListener('pointerdown', (e) => {
+  const nav = $('#profiles');
+  if (nav.classList.contains('open') && !nav.contains(e.target)) nav.classList.remove('open');
+});
 
 let switching = false;
 let switchTurn = 0;
@@ -370,6 +452,7 @@ const dock = $('#dock');
 const tip = $('#tip');
 
 function iconSrc(app) {
+  if (app.builtin === 'notes') return NOTES_ICON;
   if (!app.icon) return iconCache.get(app.id) || letterTile(app.name);
   if (app.icon.kind === 'remote') return app.icon.url;
   return iconCache.get(app.id) || letterTile(app.name);
@@ -454,8 +537,8 @@ function needsIcon(app) {
 }
 
 // Ids of apps kept in a folder widget in this mode: they're shown there, not on the bar.
-const folderIds = () => new Set((profile().widgets || []).filter((w) => w.type === 'folder').flatMap((w) => w.data?.ids || []));
-const barApps = () => { const f = folderIds(); return profile().apps.filter((a) => !f.has(a.id)); };
+// App folders hold shortcuts: every app stays on the bar.
+const barApps = () => profile().apps;
 
 async function renderDock() {
   const apps = barApps();
@@ -537,6 +620,7 @@ async function applyIcon(app, res) {
   } else {
     app.icon = { kind: 'data', source: res.source, at: Date.now(), pv: ICON_PIPELINE };
     iconCache.set(app.id, res.dataUrl);
+    showIcon(app.id, res.dataUrl);
     await store.set({ ['icon:' + app.id]: res.dataUrl });
   }
   if (res.source === 'brandfetch') delete app.bfMissAt;
@@ -1106,6 +1190,7 @@ async function renderPopular() {
   const cache = await loadPopIcons();
   const grid = $('#popGrid');
   grid.innerHTML = '';
+  grid.append(notesPopItem());
   for (const [name, url] of POPULAR[popSet]) {
     const host = hostOf(url);
     const mine = have.get(host);
@@ -1136,6 +1221,29 @@ async function renderPopular() {
     });
     grid.append(b);
   }
+}
+
+// "Notes" in the add sheet: ticked when it's on the bar; tap to add it back or take it off.
+function notesPopItem() {
+  const b = document.createElement('button');
+  b.type = 'button';
+  const sync = () => {
+    const on = profile().apps.some((a) => a.builtin === 'notes');
+    b.className = 'pop-item builtin' + (on ? ' added' : '');
+    b.title = on ? 'Remove Notes from your bar' : 'Add Notes';
+    b.setAttribute('aria-pressed', String(on));
+  };
+  b.innerHTML = `<span class="pop-icon full"><img alt="" src="${NOTES_ICON}"></span><span class="pop-name">Notes</span><span class="pop-tick" aria-hidden="true"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>`;
+  b.addEventListener('click', async () => {
+    const apps = profile().apps;
+    const i = apps.findIndex((a) => a.builtin === 'notes');
+    if (i >= 0) apps.splice(i, 1); else apps.push(notesApp());
+    sync();
+    save();
+    await renderDock();
+  });
+  sync();
+  return b;
 }
 
 function renderWidgetCards() {
@@ -1191,14 +1299,18 @@ const SETTINGS = [
         refresh: () => { $('#wallFor').textContent = modesOn() ? `Wallpaper for ${profile().name} mode` : 'Wallpaper'; renderWallGrid(); },
       },
       {
-        type: 'custom',
-        render: (el) => {
-          el.innerHTML = `<div class="engine-row">
-            <div class="s-label"><div class="s-title">3D Wallpaper Engine</div><div class="s-hint" id="engineSub"></div>
-            <div class="engine-progress" id="engineProg" hidden><span></span></div></div>
-            <div class="s-btns" id="engineActions"></div></div>`;
-        },
-        refresh: () => renderEngineRow(),
+        type: 'group',
+        label: 'Create your own',
+        items: [{
+          type: 'custom',
+          render: (el) => {
+            el.innerHTML = `<div class="engine-row">
+              <div class="s-label"><div class="s-title">3D Wallpaper Engine</div><div class="s-hint" id="engineSub"></div>
+              <div class="engine-progress" id="engineProg" hidden><span></span></div></div>
+              <div class="s-btns" id="engineActions"></div></div>`;
+          },
+          refresh: () => renderEngineRow(),
+        }],
       },
       {
         type: 'toggle', key: 'clockMini', label: 'Small clock at the top',
@@ -1236,8 +1348,8 @@ const SETTINGS = [
     summary: () => (state.settings.searchOn === false ? 'Off' : `${(ENGINES.find((e) => e.id === state.settings.searchEngine) || ENGINES[0]).name}${state.settings.searchApps === false ? '' : ' · finds your apps too'}`),
     items: [
       {
-        type: 'toggle', key: 'searchOn', label: 'Search bar',
-        hint: 'Enter opens the top app, Shift + Enter searches the web.',
+        type: 'toggle', key: 'searchOn', label: 'Show search bar',
+        hint: 'Turn off to give widgets more room. Enter opens the top app, Shift + Enter searches the web.',
         onChange: () => applySearchOn(),
       },
       {
@@ -1336,18 +1448,29 @@ const SETTINGS = [
     title: 'Keep watching',
     icon: ICON.watch,
     summary: () => {
+      if (state.settings.watchOn === false) return 'Off';
       const on = WATCH_SERVICES.filter((svc) => state.settings[svc.setting] !== false).map((svc) => svc.name);
-      return on.length ? `${on.join(', ')}${modesOn() ? ' · Chill mode' : ''}` : 'Off';
+      return on.length ? `${on.join(', ')}${modesOn() && !state.settings.watchInWork ? ' · Chill mode' : ''}` : 'Off';
     },
-    items: WATCH_SERVICES.map((svc) => ({
-      type: 'toggle', key: svc.setting, label: svc.name,
+    items: [
+      {
+        type: 'toggle', key: 'watchOn', label: 'Show Keep watching',
+        hint: 'Turn off to give widgets more room', onChange: () => renderContinue(),
+      },
+      {
+        type: 'toggle', key: 'watchInWork', label: 'Show in Work mode',
+        hint: 'Off by default, so Work stays focused',
+        when: () => state.settings.watchOn !== false && modesOn(), onChange: () => renderContinue(),
+      },
+    ].concat(WATCH_SERVICES.map((svc) => ({
+      type: 'toggle', key: svc.setting, label: svc.name, when: () => state.settings.watchOn !== false,
       hint: {
         prime: 'Your last show with time left',
         netflix: 'Artwork appears once you’ve browsed Netflix in this browser',
         hotstar: 'Best effort: JioHotstar’s pages change often',
       }[svc.id],
       onChange: async (on) => { if (!on) await store.remove(watchKey(svc.id)); renderContinue(); },
-    })),
+    }))),
   },
   {
     id: 'weather',
@@ -1424,18 +1547,19 @@ function setClockTop(v) {
 async function exportBackup() {
   const all = await store.getAll();
   for (const k of Object.keys(all)) if (k.startsWith('pinterest:') || k === POP_KEY) delete all[k]; // sign-in and caches stay on this computer
-  const blob = new Blob([JSON.stringify({ horizonNewTab: 1, ...all }, null, 1)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ betterTab: 1, ...all }, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'new-tab-backup.json';
+  a.download = 'bettertab-backup.json';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 async function importBackup(file) {
   try {
     const data = JSON.parse(await file.text());
-    if (!data.horizonNewTab || !data.state?.profiles) throw new Error();
-    delete data.horizonNewTab;
+    if (!data.state?.profiles) throw new Error();
+    // keep only real saved data: the main state and prefixed keys like icon:, watch:, wx:
+    for (const k of Object.keys(data)) if (k !== 'state' && !k.includes(':')) delete data[k];
     await store.set(data);
     location.reload();
   } catch {
@@ -1650,9 +1774,47 @@ async function renderWallGrid() {
   const add = document.createElement('button');
   add.type = 'button';
   add.className = 'wall-item wall-add';
-  add.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg><span>Create your own</span>';
-  add.addEventListener('click', openEngine);
+  add.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></svg><span>Add your own</span>';
+  add.title = 'Use a photo from your computer';
+  add.addEventListener('click', () => wallFile.click());
   grid.append(add);
+}
+
+// One file picker for "Add your own" that outlives grid redraws.
+const wallFile = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*', hidden: true });
+document.body.append(wallFile);
+wallFile.addEventListener('change', async () => {
+  const f = wallFile.files?.[0];
+  wallFile.value = '';
+  if (!f) return;
+  const label = $('.wall-add span');
+  if (label) label.textContent = 'Adding…';
+  try {
+    const rec = await photoWallpaper(f);
+    await putWallpaper(rec);
+    const p = profile();
+    if (p.clock) delete p.clock.top;
+    p.wallpaper = rec.id;
+    save(); applyWallpaper();
+  } catch {
+    uiAlert({ title: 'Can’t use this image', message: 'Choose a JPG, PNG or WebP photo.' });
+  }
+  renderWallGrid();
+});
+
+// A plain photo wallpaper: no cut-out, so the clock sits in front of it.
+async function photoWallpaper(f) {
+  const bmp = await createImageBitmap(f);
+  const fit = async (max, q) => {
+    const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const c = new OffscreenCanvas(Math.round(bmp.width * k), Math.round(bmp.height * k));
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    return c.convertToBlob({ type: 'image/jpeg', quality: q });
+  };
+  const [bg, thumb] = [await fit(3840, 0.9), await fit(360, 0.8)];
+  bmp.close?.();
+  const name = (f.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'My photo').slice(0, 24);
+  return { id: 'wp_' + Math.random().toString(36).slice(2, 10), name, createdAt: Date.now(), kind: 'photo', bg, fg: null, thumb };
 }
 
 let engineBusy = false;
@@ -1663,8 +1825,8 @@ async function renderEngineRow() {
   box.innerHTML = '';
   const mk = (label, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn ' + cls; b.textContent = label; b.addEventListener('click', fn); box.append(b); return b; };
   if (installed) {
-    sub.textContent = `Installed · about ${MODEL_SIZE_MB} MB. Removing it keeps the wallpapers you’ve made.`;
-    mk('Open', 'primary', openEngine);
+    sub.textContent = `Turns your photo into a wallpaper with the clock behind the scene. Installed, about ${MODEL_SIZE_MB} MB. Removing it keeps the wallpapers you’ve made.`;
+    mk('Create', 'primary', openEngine);
     mk('Remove', 'danger-ghost', async () => {
       if (!(await uiConfirm({ title: 'Remove the 3D Wallpaper Engine?', message: `Frees about ${MODEL_SIZE_MB} MB. Wallpapers you’ve made stay, and you can download it again any time.`, confirmLabel: 'Remove', danger: true }))) return;
       await removeEngine();
@@ -1711,8 +1873,8 @@ function closeEngine() {
 }
 window.addEventListener('message', (e) => {
   if (e.origin !== location.origin || e.source !== engineFrame.contentWindow) return;
-  if (e.data?.type === 'horizon-engine-close') closeEngine();
-  if (e.data?.type === 'horizon-engine-saved') { applyWallpaper(); setTimeout(closeEngine, 700); }
+  if (e.data?.type === 'bettertab-engine-close') closeEngine();
+  if (e.data?.type === 'bettertab-engine-saved') { applyWallpaper(); setTimeout(closeEngine, 700); }
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !engineOverlay.hidden) closeEngine(); });
 engineOverlay.addEventListener('click', (e) => { if (e.target === engineOverlay) closeEngine(); });
@@ -1743,10 +1905,11 @@ function paintWeather(w) {
   $('#wxTemp').textContent = `${Math.round(w.temp)}°${w.unit === 'fahrenheit' ? 'F' : 'C'}`;
   wxEl.title = [describe(w.code), w.name].filter(Boolean).join(' · ');
   wxEl.hidden = false;
+  fitTopbar();
 }
 
 async function refreshWeather(force = false) {
-  if (!state.settings.weatherOn) { wxEl.hidden = true; return; }
+  if (!state.settings.weatherOn) { wxEl.hidden = true; fitTopbar(); return; }
   const unit = state.settings.weatherUnit;
   const locKey = state.settings.weatherLoc ? `${state.settings.weatherLoc.lat},${state.settings.weatherLoc.lon}` : 'auto';
   const cached = (await store.get(WX_KEY))[WX_KEY];
@@ -1829,6 +1992,26 @@ const MAX_CARDS = 3;
 const continueEl = $('#continue');
 const continueRow = $('#continueRow');
 
+// Keep watching scrolls sideways when its cards don't fit the bar's width:
+// faded edges and arrows show where more cards are; trackpad swipes (sideways or up/down) scroll it.
+function updateContinueEdges() {
+  const max = continueRow.scrollWidth - continueRow.clientWidth;
+  continueEl.classList.toggle('overflow-l', continueRow.scrollLeft > 4);
+  continueEl.classList.toggle('overflow-r', continueRow.scrollLeft < max - 4);
+}
+continueRow.addEventListener('scroll', updateContinueEdges, { passive: true });
+new ResizeObserver(updateContinueEdges).observe(continueRow);
+new MutationObserver(() => requestAnimationFrame(updateContinueEdges)).observe(continueRow, { childList: true });
+continueRow.addEventListener('wheel', (e) => {
+  if (continueRow.scrollWidth <= continueRow.clientWidth || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  continueRow.scrollBy({ left: e.deltaY, behavior: 'auto' });
+}, { passive: false });
+continueEl.querySelectorAll('.cw-arrow').forEach((b) => b.addEventListener('click', () => {
+  const step = Math.max(continueRow.clientWidth * 0.8, 200);
+  continueRow.scrollBy({ left: b.classList.contains('left') ? -step : step });
+}));
+
 function timeLeft(sec) {
   const m = Math.max(1, Math.round(sec / 60));
   if (m < 60) return `${m}m left`;
@@ -1856,8 +2039,9 @@ function serviceIcon(svc) {
 }
 
 async function renderContinue() {
-  const work = modesOn() && state.activeProfile === 'work'; // off in Work mode
-  const on = work ? [] : WATCH_SERVICES.filter((svc) => state.settings[svc.setting] !== false);
+  const work = modesOn() && state.activeProfile === 'work';
+  const shown = state.settings.watchOn !== false && (!work || state.settings.watchInWork);
+  const on = !shown ? [] : WATCH_SERVICES.filter((svc) => state.settings[svc.setting] !== false);
   const got = on.length ? await store.get(on.map((svc) => watchKey(svc.id))) : {};
   const items = on
     .map((svc) => ({ svc, rec: got[watchKey(svc.id)] }))
@@ -1878,6 +2062,9 @@ async function renderContinue() {
       continueRow.replaceChildren(...items.map((it) => watchCard(it.svc, it.rec)));
     },
     { key: (el) => el.dataset.key || el.id || el, enter: !quiet && booted });
+  continueRow.scrollLeft = 0;
+  requestAnimationFrame(updateContinueEdges);
+  setTimeout(updateContinueEdges, 450); // after the cards' entrance animation
 }
 
 function watchCard(svc, rec) {
@@ -1988,6 +2175,11 @@ const widgets = createWidgetLayer({
   save,
   getSettings: () => state.settings,
   apps: { all: () => profile().apps, onBar: barApps, icon: iconSrc, changed: () => renderDock() },
+  // The other modes, for a widget's right-click "Move to …".
+  modes: {
+    others: () => (modesOn() ? state.profiles.filter((p) => p.id !== state.activeProfile).map((p) => ({ id: p.id, name: p.name })) : []),
+    listOf: (id) => { const p = state.profiles.find((x) => x.id === id); return p ? (p.widgets = p.widgets || []) : null; },
+  },
   // Imaginary rounded rectangle: under the mode switcher, above the Keep watching cards and bar.
   // Left and right edges line up with the mode switcher and the night button.
   getBounds: () => {
@@ -2008,8 +2200,11 @@ const widgets = createWidgetLayer({
 async function boot() {
   store.remove('watch:youtube'); // Keep watching no longer supports YouTube
   const got = await store.get('state');
+  const firstNotes = !got.state?.notesAdded; // Notes was just added to the bar: keep that
   state = normalize(got.state?.profiles ? got.state : freshState());
-  if (state !== got.state) await store.set({ state });
+  if (state !== got.state || firstNotes) await store.set({ state });
+  // Load every mode's icons before widgets draw, so app folders show real icons, not letters.
+  await loadIcons(state.profiles.flatMap((p) => p.apps));
   document.body.dataset.mode = state.activeProfile;
   applyTypeStyle();
   initSettings();
@@ -2025,6 +2220,14 @@ async function boot() {
   refreshWeather();
 
   setTimeout(() => { booted = true; }, 600);
+  // Notes opens from its tile, search or a folder via #notes.
+  const notesFromHash = () => {
+    if (location.hash !== '#notes') return;
+    history.replaceState(null, '', location.pathname + location.search);
+    openNotes();
+  };
+  addEventListener('hashchange', notesFromHash);
+  notesFromHash();
   // Keep several open tabs in sync, and pick up Prime Video progress live.
   store.onChange(async (changes) => {
     if (Object.keys(changes).some((k) => k.startsWith('watch:') && k !== 'watch:netflix-art')) renderContinue();
@@ -2047,6 +2250,7 @@ async function boot() {
     renderProfiles();
     if (!document.activeElement?.closest?.('.widget')) widgets.reset();
     if (!document.querySelector('dialog[open]')) renderDock();
+    loadIcons(state.profiles.flatMap((p) => p.apps)); // folders in other spots catch up too
   });
 }
 boot();

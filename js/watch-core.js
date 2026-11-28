@@ -3,7 +3,7 @@
 // to find the video, its title and its artwork. Data stays in chrome.storage.local
 // under "watch:<service>".
 (() => {
-  if (window.HorizonWatch) return;
+  if (window.BetterTabWatch) return;
 
   const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
   const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
@@ -99,5 +99,5 @@
     window.addEventListener('pagehide', () => save(true));
   }
 
-  window.HorizonWatch = { start, parseEpisode, freshMeta, longestPlaying, clean, norm };
+  window.BetterTabWatch = { start, parseEpisode, freshMeta, longestPlaying, clean, norm };
 })();
